@@ -1,43 +1,61 @@
 const std = @import("std");
-const toml = @import("toml_common.zig");
+const common = @import("toml_common.zig");
 
-pub fn decode(allocator: std.mem.Allocator, reader: anytype) !toml.Toml {
-    var result = toml.Toml{ .allocator = allocator };
-    errdefer result.deinit();
+pub fn decode(allocator: std.mem.Allocator, reader: anytype) !common.Toml {
+    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
+    defer parser.deinit();
 
-    const peekable = std.io.peekStream(tokenizer.lookahead, reader);
-    var parser = Parser(@TypeOf(reader)).init(peekable);
-    result = parser.parse();
+    const result = try parser.parse();
 
     return result;
 }
 
 fn Parser(comptime Reader: type) type {
     return struct {
+        const lookahead = 1;
+        const Stream = std.io.PeekStream(.{ .Static = lookahead }, Reader);
+
         allocator: std.mem.Allocator,
-        stream: tokenizer.Stream(Reader),
         previous: Token = undefined,
         current: Token = undefined,
 
-        fn init(allocator: std.mem.Allocator, stream: tokenizer.Stream(Reader)) @This() {
-            @This(){ .allocator = allocator, .stream = stream };
+        stream: Stream,
+        strings: std.ArrayListUnmanaged(u8) = .{},
+
+        output: common.Toml,
+
+        fn init(allocator: std.mem.Allocator, reader: Reader) !@This() {
+            const output = common.Toml{ .allocator = allocator };
+            const peekable = std.io.peekStream(lookahead, reader);
+            var parser = @This(){ .allocator = allocator, .stream = peekable, .output = output };
+            try parser.advance();
+            return parser;
         }
 
-        fn parse(parser: *@This()) toml.Toml {
-            var token = try tokenizer.nextToken(@TypeOf(reader), allocator, &peekable);
-            parser.consume(.bare_key);
+        fn deinit(parser: *@This()) void {
+            parser.strings.deinit(parser.allocator);
+            parser.* = undefined;
+        }
 
-            while (token.kind != .eof) : (token = try tokenizer.nextToken(@TypeOf(reader), allocator, &peekable)) {
-                // switch (token.kind) {
-                //     .eof => unreachable,
-                //     // TODO
-                // }
-                // if (token.val == .string) {
-                //     std.debug.print(" [{s}]", .{token.val.string});
-                // }
-                // std.debug.print("\n", .{});
-                token.deinit(allocator);
-            }
+        fn parse(parser: *@This()) !common.Toml {
+            try parser.consume(.bare_key, "Expected key.");
+            const key = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string));
+
+            try parser.consume(.equals, "Expected '=' after key.");
+
+            var value: common.TomlValue = undefined;
+            if (try parser.match(.@"true")) {
+                value = .{ .boolean = true };
+            } else if (try parser.match(.@"false")) {
+                value = .{ .boolean = false };
+            } else return error.parse_error;
+
+            _ = try parser.match(.newline);
+
+            try parser.consume(.eof, "Expected eof.");
+
+            try parser.output.root.put(parser.output.allocator, key, value);
+            return parser.output;
         }
 
         fn check(parser: *@This(), kind: TokenKind) bool {
@@ -52,11 +70,8 @@ fn Parser(comptime Reader: type) type {
 
         fn advance(parser: *@This()) !void {
             parser.previous = parser.current;
-            while (true) {
-                parser.current = try tokenizer.nextToken(Reader, parser.allocator, &parser.stream);
-                if (parser.current.kind != .err) break;
-                @panic("Something went wrong 👹");
-            }
+            parser.current = try parser.nextToken();
+            if (parser.current.kind == .err) @panic("err token found on advance call");
         }
 
         fn consume(parser: *@This(), kind: TokenKind, message: []const u8) !void {
@@ -65,106 +80,108 @@ fn Parser(comptime Reader: type) type {
                 return;
             }
 
-            std.debug.panic("Something went wrong 👹: '{s}'", .{message});
+            std.log.err("{s}", .{message});
+            std.debug.panic("unexpected token found on consume call\nexpected {any}, found {any}\n[{s}]", .{ kind, parser.current.kind, message });
+        }
+
+        fn nextToken(parser: *@This()) !Token {
+            var token = Token{ .kind = .err };
+
+            try parser.skipWhitespace();
+
+            const c = (try parser.readByte()) orelse {
+                token.kind = .eof;
+                return token;
+            };
+
+            switch (c) {
+                '#' => {
+                    try parser.skipComment();
+                    token.kind = .newline;
+                },
+                '[' => token.kind = .lbracket,
+                ']' => token.kind = .rbracket,
+                '=' => token.kind = .equals,
+                else => {
+                    if (isBareKeyChar(c)) {
+                        try parser.stream.putBackByte(c);
+
+                        const bounds = try parser.getBareKey();
+                        const string = parser.getString(bounds);
+
+                        token.val = .{ .string = bounds };
+                        token.kind = .bare_key;
+
+                        if (std.mem.eql(u8, "true", string)) {
+                            token.kind = .@"true";
+                        } else if (std.mem.eql(u8, "false", string)) {
+                            token.kind = .@"false";
+                        }
+                    } else {
+                        std.log.err("FOUND UNEXPECTED CHARACTER: {c}", .{c});
+                    }
+                },
+            }
+
+            return token;
+        }
+
+        fn readByte(parser: *@This()) !?u8 {
+            return parser.stream.reader().readByte() catch |e| switch (e) {
+                error.EndOfStream => return null,
+                else => return e,
+            };
+        }
+
+        fn isBareKeyChar(c: u8) bool {
+            return std.ascii.isAlNum(c) or c == '_' or c == '-';
+        }
+
+        fn getBareKey(parser: *@This()) !Token.StringBounds {
+            const start = parser.strings.items.len;
+
+            var c = (try parser.readByte()).?;
+            while (isBareKeyChar(c)) {
+                try parser.strings.append(parser.allocator, c);
+                if (try parser.readByte()) |b| c = b else break;
+            }
+
+            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+        }
+
+        fn skipComment(parser: *@This()) !void {
+            while (true) {
+                const c = try parser.readByte();
+                if (c == null or c.? == 0x0A) break;
+            }
+        }
+
+        fn skipWhitespace(parser: *@This()) !void {
+            var c = (try parser.readByte()) orelse return;
+            while (c == ' ' or c == '\t') : (c = (try parser.readByte()) orelse return) {}
+            try parser.stream.putBackByte(c);
+        }
+
+        fn getString(parser: *@This(), bounds: Token.StringBounds) []const u8 {
+            std.debug.assert(parser.strings.items.len >= bounds.start + bounds.len);
+            return parser.strings.items[bounds.start .. bounds.start + bounds.len];
         }
     };
 }
 
-const tokenizer = struct {
-    const lookahead = 1;
-    fn Stream(comptime UnderlyingReader: type) type {
-        return std.io.PeekStream(.{ .Static = tokenizer.lookahead }, UnderlyingReader);
-    }
-
-    fn nextToken(
-        comptime Reader: type,
-        allocator: std.mem.Allocator,
-        peek_stream: *Stream(Reader),
-    ) !Token {
-        var token = Token{ .kind = .err };
-
-        try skipWhitespace(peek_stream);
-
-        const c = (try readByte(peek_stream)) orelse {
-            token.kind = .eof;
-            return token;
-        };
-
-        switch (c) {
-            '#' => {
-                try skipComment(peek_stream);
-                token.kind = .newline;
-            },
-            '[' => token.kind = .lbracket,
-            ']' => token.kind = .rbracket,
-            '=' => token.kind = .equals,
-            else => {
-                if (isBareKeyChar(c)) {
-                    try peek_stream.putBackByte(c);
-                    token.val = .{ .string = try getBareKey(allocator, peek_stream) };
-                    token.kind = .bare_key;
-                    if (std.mem.eql(u8, "true", token.val.string)) {
-                        token.kind = .@"true";
-                    } else if (std.mem.eql(u8, "false", token.val.string)) {
-                        token.kind = .@"false";
-                    }
-                } else {
-                    std.log.err("FOUND UNEXPECTED CHARACTER: {c}", .{c});
-                }
-            },
-        }
-
-        return token;
-    }
-
-    fn readByte(peek_stream: anytype) !?u8 {
-        return peek_stream.reader().readByte() catch |e| switch (e) {
-            error.EndOfStream => return null,
-            else => return e,
-        };
-    }
-
-    fn isBareKeyChar(c: u8) bool {
-        return std.ascii.isAlNum(c) or c == '_' or c == '-';
-    }
-
-    fn getBareKey(allocator: std.mem.Allocator, peek_stream: anytype) ![]const u8 {
-        var buf = std.ArrayList(u8).init(allocator);
-        errdefer buf.deinit();
-
-        var c = (try readByte(peek_stream)).?;
-        while (isBareKeyChar(c)) {
-            try buf.append(c);
-            if (try readByte(peek_stream)) |b| c = b else break;
-        }
-        return buf.toOwnedSlice();
-    }
-
-    fn skipComment(peek_stream: anytype) !void {
-        while (true) {
-            const c = try readByte(peek_stream);
-            if (c == null or c.? == 0x0A) break;
-        }
-    }
-
-    fn skipWhitespace(peek_stream: anytype) !void {
-        var c = (try readByte(peek_stream)) orelse return;
-        while (c == ' ' or c == '\t') : (c = (try readByte(peek_stream)) orelse return) {}
-        try peek_stream.putBackByte(c);
-    }
-};
-
 const Token = struct {
     kind: TokenKind,
-    val: union(enum) {
-        none: void,
-        string: []const u8,
-    } = .{ .none = {} },
+    val: Value = .{ .none = {} },
 
-    fn deinit(token: *Token, allocator: std.mem.Allocator) void {
-        if (token.val == .string) allocator.free(token.val.string);
-        token.* = undefined;
-    }
+    const Value = union(enum) {
+        none: void,
+        string: StringBounds,
+    };
+
+    const StringBounds = struct {
+        start: usize,
+        len: usize,
+    };
 };
 
 const TokenKind = enum {
@@ -180,11 +197,34 @@ const TokenKind = enum {
 };
 
 test "basic" {
-    const doc =
+    const source =
         \\la_bufa = true
         \\#esta pasando una crisis perrotini
-        \\la_yusa = true
+        // \\la_yusa = true
     ;
-    var fbr = std.io.fixedBufferStream(doc);
-    _ = try decode(std.testing.allocator, fbr.reader());
+
+    var dbg = std.io.fixedBufferStream(source);
+    try debugPrintAllTokens(std.testing.allocator, dbg.reader());
+
+    var fbr = std.io.fixedBufferStream(source);
+    var toml = try decode(std.testing.allocator, fbr.reader());
+    defer toml.deinit();
+}
+
+fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
+    std.debug.print("\nPRINTING ALL TOKENS:\n", .{});
+
+    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
+    defer parser.deinit();
+
+    while (parser.current.kind != .eof) {
+        std.debug.print("FOUND: {any}", .{parser.current.kind});
+        switch (parser.current.val) {
+            .none => {},
+            .string => std.debug.print(" [{s}]", .{parser.getString(parser.current.val.string)}),
+        }
+        std.debug.print("\n", .{});
+
+        try parser.advance();
+    }
 }

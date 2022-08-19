@@ -5,6 +5,8 @@ pub const Toml = struct {
     root: std.StringHashMapUnmanaged(TomlValue) = .{},
 
     pub fn deinit(toml: *Toml) void {
+        var ki = toml.root.keyIterator();
+        while (ki.next()) |k| toml.allocator.free(k.*);
         toml.root.deinit(toml.allocator);
     }
 };
