@@ -116,6 +116,8 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else if (try parser.match(.literal_string)) {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
+            } else if (try parser.match(.multi_line_literal_string)) {
+                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else return error.expected_value;
 
             errdefer {
@@ -171,10 +173,9 @@ fn Parser(comptime Reader: type) type {
                     const next = try parser.readByte();
                     const nextnext = try parser.readByte();
                     if (next != null and next.? == '\'' and nextnext != null and nextnext.? == '\'') {
-                        @panic("TODO multi line literal strings");
-                        // const bounds = try parser.tokenizeMultiLineBasicString();
-                        // token.kind = .multi_line_basic_string;
-                        // token.val = .{ .string = bounds };
+                        const bounds = try parser.tokenizeMultiLineLiteralString();
+                        token.kind = .multi_line_literal_string;
+                        token.val = .{ .string = bounds };
                     } else {
                         if (nextnext) |nn| try parser.stream.putBackByte(nn);
                         if (next) |n| try parser.stream.putBackByte(n);
@@ -388,6 +389,41 @@ fn Parser(comptime Reader: type) type {
             return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
+        fn tokenizeMultiLineLiteralString(parser: *@This()) !Token.StringBounds {
+            const start = parser.strings.items.len;
+
+            trim_newline: {
+                const trim_a = (try parser.readByte()) orelse break :trim_newline;
+                if (trim_a == '\n') break :trim_newline;
+                if (trim_a == '\r') inner_trim_newline: {
+                    const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
+                    if (trim_b == '\n') break :trim_newline;
+                    try parser.stream.putBackByte(trim_b);
+                }
+                try parser.stream.putBackByte(trim_a);
+            }
+
+            while (true) {
+                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+
+                if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
+
+                if (c == '\'') check_end: {
+                    const next = (try parser.readByte()) orelse break :check_end;
+                    if (next == '\'') inner_check_end: {
+                        const nextnext = (try parser.readByte()) orelse break :inner_check_end;
+                        if (nextnext == '\'') break;
+                        try parser.stream.putBackByte(nextnext);
+                    }
+                    try parser.stream.putBackByte(next);
+                }
+
+                try parser.strings.append(parser.allocator, c);
+            }
+
+            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+        }
+
         fn tokenizeUnicodeSequence(parser: *@This(), comptime len: u8) !void {
             var digits: [len]u8 = undefined;
             for (digits) |*d| {
@@ -452,6 +488,7 @@ const TokenKind = enum {
     basic_string,
     multi_line_basic_string,
     literal_string,
+    multi_line_literal_string,
     @"true",
     @"false",
     lbracket,
@@ -680,4 +717,30 @@ test "literal strings 1" {
     try std.testing.expectEqualSlices(u8, "\\\\ServerX\\admin$\\system32\\", toml.get("winpath2").?.string);
     try std.testing.expectEqualSlices(u8, "Tom \"Dubs\" Preston-Werner", toml.get("quoted").?.string);
     try std.testing.expectEqualSlices(u8, "<\\i\\c*\\s*>", toml.get("regex").?.string);
+}
+
+test "multi-line literal strings 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line literal strings 1.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "I [dw]on't need \\d{2} apples", toml.get("regex2").?.string);
+    try std.testing.expectEqualSlices(u8,
+        \\The first newline is
+        \\trimmed in raw strings.
+        \\   All other whitespace
+        \\   is preserved.
+        \\
+    , toml.get("lines").?.string);
+}
+
+test "multi-line literal strings 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line literal strings 2.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8,
+        \\Here are fifteen quotation marks: """""""""""""""
+    , toml.get("quot15").?.string);
+    try std.testing.expectEqualSlices(u8, "Here are fifteen apostrophes: '''''''''''''''", toml.get("apos15").?.string);
 }
