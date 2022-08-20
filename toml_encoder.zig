@@ -122,7 +122,7 @@ fn writeString(string: []const u8, writer: anytype) !void {
                 if (std.ascii.isCntrl(c)) {
                     const utf8_len = try std.unicode.utf8ByteSequenceLength(c);
                     const utf8_int = try std.unicode.utf8Decode(string[i .. i + utf8_len]);
-                    try writer.print("\\u{x:0>8}", .{utf8_int});
+                    try writer.print("\\U{x:0>8}", .{utf8_int});
                 } else {
                     try writer.writeByte(c);
                 }
@@ -184,7 +184,7 @@ test "strings" {
 
     const expected =
         \\bar = "d(-.-)b"
-        \\baz = "\u0000000e"
+        \\baz = "\U0000000e"
         \\
     ;
     try encode(Foo, foo, buffer.writer());
