@@ -12,7 +12,7 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) !common.Toml {
 
 fn Parser(comptime Reader: type) type {
     return struct {
-        const lookahead = 1;
+        const lookahead = 2;
         const Stream = std.io.PeekStream(.{ .Static = lookahead }, Reader);
 
         allocator: std.mem.Allocator,
@@ -94,6 +94,8 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .boolean = false };
             } else if (try parser.match(.basic_string)) {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
+            } else if (try parser.match(.multi_line_basic_string)) {
+                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else return error.parse_error;
 
             try parser.output.root.put(parser.output.allocator, key, value);
@@ -118,9 +120,20 @@ fn Parser(comptime Reader: type) type {
                 ']' => token.kind = .rbracket,
                 '=' => token.kind = .equals,
                 '"' => {
-                    const bounds = try parser.tokenizeBasicString();
-                    token.kind = .basic_string;
-                    token.val = .{ .string = bounds };
+                    const next = try parser.readByte();
+                    const nextnext = try parser.readByte();
+                    if (next != null and next.? == '"' and nextnext != null and nextnext.? == '"') {
+                        const bounds = try parser.tokenizeMultiLineBasicString();
+                        token.kind = .multi_line_basic_string;
+                        token.val = .{ .string = bounds };
+                    } else {
+                        if (nextnext) |nn| try parser.stream.putBackByte(nn);
+                        if (next) |n| try parser.stream.putBackByte(n);
+
+                        const bounds = try parser.tokenizeBasicString();
+                        token.kind = .basic_string;
+                        token.val = .{ .string = bounds };
+                    }
                 },
                 '\n' => token.kind = .newline,
                 '\r' => {
@@ -223,6 +236,58 @@ fn Parser(comptime Reader: type) type {
             return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
+        fn tokenizeMultiLineBasicString(parser: *@This()) !Token.StringBounds {
+            const start = parser.strings.items.len;
+
+            trim_newline: {
+                const trim_a = (try parser.readByte()) orelse break :trim_newline;
+                if (trim_a == '\n') break :trim_newline;
+                if (trim_a == '\r') inner_trim_newline: {
+                    const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
+                    if (trim_b == '\n') break :trim_newline;
+                    try parser.stream.putBackByte(trim_b);
+                }
+                try parser.stream.putBackByte(trim_a);
+            }
+
+            while (true) {
+                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+
+                // TODO line ending backslash
+
+                if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
+
+                if (c == '"') check_end: {
+                    const next = (try parser.readByte()) orelse break :check_end;
+                    if (next == '"') inner_check_end: {
+                        const nextnext = (try parser.readByte()) orelse break :inner_check_end;
+                        if (nextnext == '"') break;
+                        try parser.stream.putBackByte(nextnext);
+                    }
+                    try parser.stream.putBackByte(next);
+                }
+
+                if (c == '\\') {
+                    c = (try parser.readByte()) orelse return error.unexpected_eof;
+                    switch (c) {
+                        '"', '\\' => try parser.strings.append(parser.allocator, c),
+                        'b' => try parser.strings.append(parser.allocator, std.ascii.control_code.BS),
+                        't' => try parser.strings.append(parser.allocator, '\t'),
+                        'n' => try parser.strings.append(parser.allocator, '\n'),
+                        'f' => try parser.strings.append(parser.allocator, std.ascii.control_code.FF),
+                        'r' => try parser.strings.append(parser.allocator, '\r'),
+                        'u' => try parser.tokenizeUnicodeSequence(4),
+                        'U' => try parser.tokenizeUnicodeSequence(8),
+                        else => return error.invalid_escape_sequence,
+                    }
+                } else {
+                    try parser.strings.append(parser.allocator, c);
+                }
+            }
+
+            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+        }
+
         fn tokenizeUnicodeSequence(parser: *@This(), comptime len: u8) !void {
             var digits: [len]u8 = undefined;
             for (digits) |*d| {
@@ -278,6 +343,7 @@ const TokenKind = enum {
     newline,
     bare_key,
     basic_string,
+    multi_line_basic_string,
     @"true",
     @"false",
     lbracket,
@@ -286,6 +352,24 @@ const TokenKind = enum {
     eof,
     err,
 };
+
+fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
+    std.debug.print("\nPRINTING ALL TOKENS:\n", .{});
+
+    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
+    defer parser.deinit();
+
+    while (parser.current.kind != .eof) {
+        std.debug.print("FOUND: {any}", .{parser.current.kind});
+        switch (parser.current.val) {
+            .none => {},
+            .string => std.debug.print(" [{s}]", .{parser.getString(parser.current.val.string)}),
+        }
+        std.debug.print("\n", .{});
+
+        try parser.advance();
+    }
+}
 
 test "basic" {
     var stream = std.io.fixedBufferStream(
@@ -322,20 +406,10 @@ test "values" {
     try std.testing.expectEqualSlices(u8, "ñ \u{123} \u{1f415}", toml.get("basic-string-unicode").?.string);
 }
 
-fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
-    std.debug.print("\nPRINTING ALL TOKENS:\n", .{});
+test "multi-line basic strings 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings 1.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
 
-    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
-    defer parser.deinit();
-
-    while (parser.current.kind != .eof) {
-        std.debug.print("FOUND: {any}", .{parser.current.kind});
-        switch (parser.current.val) {
-            .none => {},
-            .string => std.debug.print(" [{s}]", .{parser.getString(parser.current.val.string)}),
-        }
-        std.debug.print("\n", .{});
-
-        try parser.advance();
-    }
+    try std.testing.expectEqualSlices(u8, "Roses are red\nViolets are blue", toml.get("str1").?.string);
 }
