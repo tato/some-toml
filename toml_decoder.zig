@@ -14,6 +14,7 @@ pub const DecodeError = std.mem.Allocator.Error || error{
     io_error,
     unexpected_eof,
     unexpected_character,
+    unexpected_token,
     expected_value,
     invalid_newline_in_basic_string,
     invalid_control_in_basic_string,
@@ -80,7 +81,7 @@ fn Parser(comptime Reader: type) type {
         fn advance(parser: *@This()) !void {
             parser.previous = parser.current;
             parser.current = try parser.nextToken();
-            if (parser.current.kind == .err) @panic("err token found on advance call");
+            if (parser.current.kind == .err) return error.unexpected_token;
         }
 
         fn consume(parser: *@This(), kind: TokenKind, message: []const u8) !void {
@@ -89,8 +90,8 @@ fn Parser(comptime Reader: type) type {
                 return;
             }
 
-            std.log.err("{s}", .{message});
-            std.debug.panic("unexpected token found on consume call\nexpected {any}, found {any}\n[{s}]", .{ kind, parser.current.kind, message });
+            std.log.debug("{s}", .{message});
+            return error.unexpected_token;
         }
 
         fn parseKvPair(parser: *@This()) !void {
@@ -425,10 +426,48 @@ test "values" {
     try std.testing.expectEqualSlices(u8, "ñ \u{123} \u{1f415}", toml.get("basic-string-unicode").?.string);
 }
 
+test "comment" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/comment.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "value", toml.get("key").?.string);
+    try std.testing.expectEqualSlices(u8, "# This is not a comment", toml.get("another").?.string);
+}
+
 test "invalid 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 1.toml"));
     const err = decode(std.testing.allocator, stream.reader());
     try std.testing.expectError(error.expected_value, err);
+}
+
+test "invalid 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 2.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.unexpected_token, err);
+}
+
+test "bare keys" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/bare keys.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "value", toml.get("key").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("bare_key").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("bare-key").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("1234").?.string);
+}
+
+test "quoted keys" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/quoted keys.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "value", toml.get("127.0.0.1").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("character encoding").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("ʎǝʞ").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("key2").?.string);
+    try std.testing.expectEqualSlices(u8, "value", toml.get("quoted \"value\"").?.string);
 }
 
 test "multi-line basic strings 1" {
