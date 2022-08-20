@@ -479,27 +479,6 @@ fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
     }
 }
 
-test "values" {
-    var stream = std.io.fixedBufferStream(
-        \\basic-string = "take me to your leader"
-        \\basic-string-escape = "\" \\ \b \t \n \f \r"
-        \\basic-string-unicode = "ñ \u0123 \U0001f415"
-        // \\boolean-true = true
-        // \\boolean-false = false
-        // \\integer = 123
-        // \\negative-integer = -123
-        // \\float = 1.0
-        // \\negative-float = -1.0
-    );
-
-    var toml = try decode(std.testing.allocator, stream.reader());
-    defer toml.deinit();
-
-    try std.testing.expectEqualSlices(u8, "take me to your leader", toml.get("basic-string").?.string);
-    try std.testing.expectEqualSlices(u8, "\" \\ \x08 \t \n \x0C \r", toml.get("basic-string-escape").?.string);
-    try std.testing.expectEqualSlices(u8, "ñ \u{123} \u{1f415}", toml.get("basic-string-unicode").?.string);
-}
-
 test "comment" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/comment.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
@@ -665,6 +644,22 @@ test "multi-line basic strings 1" {
     try std.testing.expectEqualSlices(u8, "Roses are red\nViolets are blue", toml.get("str1").?.string);
 }
 
+test "multi-line basic strings 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings 2.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8,
+        \\Here are two quotation marks: "". Simple enough.
+    , toml.get("str4").?.string);
+    try std.testing.expectEqualSlices(u8,
+        \\Here are three quotation marks: """.
+    , toml.get("str5").?.string);
+    try std.testing.expectEqualSlices(u8,
+        \\Here are fifteen quotation marks: """"""""""""""".
+    , toml.get("str6").?.string);
+}
+
 test "multi-line basic strings line ending backslash" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings line ending backslash.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
@@ -674,4 +669,15 @@ test "multi-line basic strings line ending backslash" {
     try std.testing.expectEqualSlices(u8, expect, toml.get("str1").?.string);
     try std.testing.expectEqualSlices(u8, expect, toml.get("str2").?.string);
     try std.testing.expectEqualSlices(u8, expect, toml.get("str3").?.string);
+}
+
+test "literal strings 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/literal strings 1.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "C:\\Users\\nodejs\\templates", toml.get("winpath").?.string);
+    try std.testing.expectEqualSlices(u8, "\\\\ServerX\\admin$\\system32\\", toml.get("winpath2").?.string);
+    try std.testing.expectEqualSlices(u8, "Tom \"Dubs\" Preston-Werner", toml.get("quoted").?.string);
+    try std.testing.expectEqualSlices(u8, "<\\i\\c*\\s*>", toml.get("regex").?.string);
 }
