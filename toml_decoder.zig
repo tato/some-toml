@@ -302,8 +302,6 @@ fn Parser(comptime Reader: type) type {
             while (true) {
                 var c = (try parser.readByte()) orelse return error.unexpected_eof;
 
-                // TODO line ending backslash
-
                 if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
 
                 if (c == '"') check_end: {
@@ -327,6 +325,41 @@ fn Parser(comptime Reader: type) type {
                         'r' => try parser.strings.append(parser.allocator, '\r'),
                         'u' => try parser.tokenizeUnicodeSequence(4),
                         'U' => try parser.tokenizeUnicodeSequence(8),
+                        ' ', '\t', '\r', '\n' => {
+                            var found_the_newline = c == '\n';
+                            if (c == '\r') {
+                                c = (try parser.readByte()) orelse return error.unexpected_eof;
+                                if (c == '\n') {
+                                    found_the_newline = true;
+                                } else {
+                                    return error.unexpected_character;
+                                }
+                            }
+                            while (true) {
+                                c = (try parser.readByte()) orelse return error.unexpected_eof;
+                                switch (c) {
+                                    ' ', '\t' => {},
+                                    '\n' => found_the_newline = true,
+                                    '\r' => {
+                                        c = (try parser.readByte()) orelse return error.unexpected_eof;
+                                        if (c == '\n') {
+                                            found_the_newline = true;
+                                        } else {
+                                            return error.unexpected_character;
+                                        }
+                                    },
+                                    else => {
+                                        if (found_the_newline) {
+                                            try parser.stream.putBackByte(c);
+                                            break;
+                                        } else {
+                                            std.log.err("Found '{c}' before finding the newline while parsing line ending backslash.", .{c});
+                                            return error.invalid_escape_sequence;
+                                        }
+                                    },
+                                }
+                            }
+                        },
                         else => return error.invalid_escape_sequence,
                     }
                 } else {
