@@ -200,6 +200,7 @@ fn Parser(comptime Reader: type) type {
                 if (c == '"') break;
 
                 if (c == '\n') return error.invalid_newline_in_basic_string;
+                if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
 
                 if (c == '\\') {
                     c = (try parser.readByte()) orelse return error.unexpected_eof;
