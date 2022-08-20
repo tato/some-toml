@@ -21,6 +21,7 @@ pub const DecodeError = std.mem.Allocator.Error || error{
     invalid_escape_sequence,
     invalid_char_in_unicode_escape_sequence,
     invalid_unicode_scalar_in_escape_sequence,
+    repeated_key,
 };
 
 fn Parser(comptime Reader: type) type {
@@ -117,7 +118,19 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else return error.expected_value;
 
-            try parser.output.root.put(parser.output.allocator, key, value);
+            errdefer {
+                switch (value) {
+                    .boolean => {},
+                    .string => parser.output.allocator.free(value.string),
+                }
+            }
+
+            const gop = try parser.output.root.getOrPut(parser.output.allocator, key);
+            if (gop.found_existing) {
+                return error.repeated_key;
+            } else {
+                gop.value_ptr.* = value;
+            }
         }
 
         fn nextToken(parser: *@This()) !Token {
@@ -516,6 +529,85 @@ test "empty keys 1" {
 
 test "empty keys 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/empty keys 2.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "dotted keys 1" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 1.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "dotted keys 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 2.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "repeat keys 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 1.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.repeated_key, err);
+}
+
+test "repeat keys 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 2.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.repeated_key, err);
+}
+
+test "repeat keys 3" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 3.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "repeat keys 4" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 4.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.repeated_key, err);
+}
+
+test "out of order 1" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 1.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "out of order 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 2.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "dotted keys not floats" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys not floats.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
