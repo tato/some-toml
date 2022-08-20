@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("toml_common.zig");
 
-pub fn decode(allocator: std.mem.Allocator, reader: anytype) !common.Toml {
+pub fn decode(allocator: std.mem.Allocator, reader: anytype) DecodeError!common.Toml {
     var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
     defer parser.deinit();
 
@@ -9,6 +9,18 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) !common.Toml {
 
     return result;
 }
+
+pub const DecodeError = std.mem.Allocator.Error || error{
+    io_error,
+    unexpected_eof,
+    unexpected_character,
+    expected_value,
+    invalid_newline_in_basic_string,
+    invalid_control_in_basic_string,
+    invalid_escape_sequence,
+    invalid_char_in_unicode_escape_sequence,
+    invalid_unicode_scalar_in_escape_sequence,
+};
 
 fn Parser(comptime Reader: type) type {
     return struct {
@@ -96,7 +108,7 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else if (try parser.match(.multi_line_basic_string)) {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
-            } else return error.parse_error;
+            } else return error.expected_value;
 
             try parser.output.root.put(parser.output.allocator, key, value);
         }
@@ -174,7 +186,7 @@ fn Parser(comptime Reader: type) type {
         fn readByte(parser: *@This()) !?u8 {
             return parser.stream.reader().readByte() catch |e| switch (e) {
                 error.EndOfStream => return null,
-                else => return e,
+                else => return error.io_error,
             };
         }
 
@@ -298,9 +310,16 @@ fn Parser(comptime Reader: type) type {
                     return error.invalid_char_in_unicode_escape_sequence;
                 }
             }
-            const scalar = try std.fmt.parseInt(u21, &digits, 16);
+            const scalar = std.fmt.parseInt(u21, &digits, 16) catch |e| switch (e) {
+                error.Overflow => return error.invalid_unicode_scalar_in_escape_sequence,
+                error.InvalidCharacter => unreachable,
+            };
             var utf8_buf: [4]u8 = undefined;
-            const utf8_len = try std.unicode.utf8Encode(scalar, &utf8_buf);
+            const utf8_len = std.unicode.utf8Encode(scalar, &utf8_buf) catch |e| switch (e) {
+                error.Utf8CannotEncodeSurrogateHalf,
+                error.CodepointTooLarge,
+                => return error.invalid_unicode_scalar_in_escape_sequence,
+            };
             try parser.strings.appendSlice(parser.allocator, utf8_buf[0..utf8_len]);
         }
 
@@ -404,6 +423,12 @@ test "values" {
     try std.testing.expectEqualSlices(u8, "take me to your leader", toml.get("basic-string").?.string);
     try std.testing.expectEqualSlices(u8, "\" \\ \x08 \t \n \x0C \r", toml.get("basic-string-escape").?.string);
     try std.testing.expectEqualSlices(u8, "ñ \u{123} \u{1f415}", toml.get("basic-string-unicode").?.string);
+}
+
+test "invalid 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 1.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.expected_value, err);
 }
 
 test "multi-line basic strings 1" {
