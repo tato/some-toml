@@ -56,6 +56,10 @@ fn Parser(comptime Reader: type) type {
             while (true) {
                 if (try parser.match(.bare_key)) {
                     try parser.parseKvPair();
+                } else if (try parser.match(.basic_string)) {
+                    try parser.parseKvPair();
+                } else if (try parser.match(.literal_string)) {
+                    try parser.parseKvPair();
                 }
 
                 if (try parser.match(.newline)) {} else {
@@ -145,6 +149,23 @@ fn Parser(comptime Reader: type) type {
 
                         const bounds = try parser.tokenizeBasicString();
                         token.kind = .basic_string;
+                        token.val = .{ .string = bounds };
+                    }
+                },
+                '\'' => {
+                    const next = try parser.readByte();
+                    const nextnext = try parser.readByte();
+                    if (next != null and next.? == '\'' and nextnext != null and nextnext.? == '\'') {
+                        @panic("TODO multi line literal strings");
+                        // const bounds = try parser.tokenizeMultiLineBasicString();
+                        // token.kind = .multi_line_basic_string;
+                        // token.val = .{ .string = bounds };
+                    } else {
+                        if (nextnext) |nn| try parser.stream.putBackByte(nn);
+                        if (next) |n| try parser.stream.putBackByte(n);
+
+                        const bounds = try parser.tokenizeLiteralString();
+                        token.kind = .literal_string;
                         token.val = .{ .string = bounds };
                     }
                 },
@@ -301,6 +322,24 @@ fn Parser(comptime Reader: type) type {
             return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
+        fn tokenizeLiteralString(parser: *@This()) !Token.StringBounds {
+            const start = parser.strings.items.len;
+
+            while (true) {
+                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+
+                if (c == '\'') break;
+
+                // TODO in_literal_string or in_single_line_string
+                if (c == '\n') return error.invalid_newline_in_basic_string;
+                if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
+
+                try parser.strings.append(parser.allocator, c);
+            }
+
+            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+        }
+
         fn tokenizeUnicodeSequence(parser: *@This(), comptime len: u8) !void {
             var digits: [len]u8 = undefined;
             for (digits) |*d| {
@@ -364,6 +403,7 @@ const TokenKind = enum {
     bare_key,
     basic_string,
     multi_line_basic_string,
+    literal_string,
     @"true",
     @"false",
     lbracket,
@@ -389,20 +429,6 @@ fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
 
         try parser.advance();
     }
-}
-
-test "basic" {
-    var stream = std.io.fixedBufferStream(
-        \\la_bufa =true
-        \\#esta pasando una crisis perrotini
-        \\la_yusa= false
-    );
-
-    var toml = try decode(std.testing.allocator, stream.reader());
-    defer toml.deinit();
-
-    try std.testing.expectEqual(true, toml.get("la_bufa").?.boolean);
-    try std.testing.expectEqual(false, toml.get("la_yusa").?.boolean);
 }
 
 test "values" {
@@ -460,6 +486,7 @@ test "bare keys" {
 
 test "quoted keys" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/quoted keys.toml"));
+
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
