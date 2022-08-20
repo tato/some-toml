@@ -615,10 +615,30 @@ test "dotted keys not floats" {
     try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
 }
 
+test "basic strings 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/basic strings 1.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "I'm a string. \"You can quote me\". Name\tJos\u{00E9}\nLocation\tSF.", toml.get("str").?.string);
+}
+
 test "multi-line basic strings 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings 1.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
     try std.testing.expectEqualSlices(u8, "Roses are red\nViolets are blue", toml.get("str1").?.string);
+}
+
+test "multi-line basic strings line ending backslash" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings line ending backslash.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    const expect = "The quick brown fox jumps over the lazy dog.";
+    try std.testing.expectEqualSlices(u8, expect, toml.get("str1").?.string);
+    try std.testing.expectEqualSlices(u8, expect, toml.get("str2").?.string);
+    try std.testing.expectEqualSlices(u8, expect, toml.get("str3").?.string);
 }
