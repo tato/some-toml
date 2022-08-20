@@ -113,6 +113,8 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else if (try parser.match(.multi_line_basic_string)) {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
+            } else if (try parser.match(.literal_string)) {
+                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else return error.expected_value;
 
             try parser.output.root.put(parser.output.allocator, key, value);
@@ -473,6 +475,12 @@ test "invalid 2" {
     try std.testing.expectError(error.unexpected_token, err);
 }
 
+test "invalid 3" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 3.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.unexpected_token, err);
+}
+
 test "bare keys" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/bare keys.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
@@ -495,6 +503,24 @@ test "quoted keys" {
     try std.testing.expectEqualSlices(u8, "value", toml.get("ʎǝʞ").?.string);
     try std.testing.expectEqualSlices(u8, "value", toml.get("key2").?.string);
     try std.testing.expectEqualSlices(u8, "value", toml.get("quoted \"value\"").?.string);
+}
+
+test "empty keys 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/empty keys 1.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+}
+
+test "empty keys 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/empty keys 2.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
 }
 
 test "multi-line basic strings 1" {
