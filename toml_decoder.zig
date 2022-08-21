@@ -71,33 +71,39 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn matchKeyValuePair(parser: *@This()) !void {
-            var key: []const u8 = undefined;
+            var keys = std.ArrayList(StringBounds).init(parser.allocator);
+            defer keys.deinit();
             var value: common.Value = undefined;
 
-            {
+            while (true) {
                 const c = (try parser.readByte()) orelse return;
 
-                if (c == '\r' or c == '\n') {
+                if (c == '"') {
+                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
+                    try keys.append(bounds);
+                } else if (c == '\'') {
+                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
+                    try keys.append(bounds);
+                } else if (isBareKeyChar(c)) {
+                    try parser.stream.putBackByte(c);
+                    const bounds = try parser.tokenizeBareKey();
+                    try keys.append(bounds);
+                } else {
                     try parser.stream.putBackByte(c);
                     return;
                 }
 
-                if (c == '"') {
-                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
-                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
-                } else if (c == '\'') {
-                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
-                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
+                try parser.skipWhitespace();
+                const dot_char = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (dot_char == '.') {
+                    try parser.skipWhitespace();
                 } else {
-                    try parser.stream.putBackByte(c);
-                    const bounds = try parser.tokenizeBareKey();
-                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
+                    try parser.stream.putBackByte(dot_char);
+                    break;
                 }
             }
-            errdefer parser.output.allocator.free(key);
 
             {
-                try parser.skipWhitespace();
                 const c = (try parser.readByte()) orelse return error.unexpected_eof;
                 if (c != '=') return error.expected_equals;
                 try parser.skipWhitespace();
@@ -108,10 +114,10 @@ fn Parser(comptime Reader: type) type {
 
                 if (c == '"') {
                     const bounds = try parser.tokenizeBasicString(.allow_multi);
-                    value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(bounds)) };
+                    value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
                 } else if (c == '\'') {
                     const bounds = try parser.tokenizeLiteralString(.allow_multi);
-                    value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(bounds)) };
+                    value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
                 } else else_prong: {
                     if (std.ascii.isDigit(c)) {
                         try parser.stream.putBackByte(c);
@@ -148,12 +154,31 @@ fn Parser(comptime Reader: type) type {
             }
             errdefer value.deinit(parser.output.allocator);
 
-            const gop = try parser.output.root.getOrPut(parser.output.allocator, key);
+            var current_table = &parser.output.root;
+            for (keys.items[0 .. keys.items.len - 1]) |key_bounds| {
+                const key = try parser.output.getString(parser.getString(key_bounds));
+                const gop = try current_table.getOrPut(parser.output.allocator, key);
+                if (gop.found_existing) {
+                    if (gop.value_ptr.* == .table) {
+                        current_table = &gop.value_ptr.*.table;
+                    } else {
+                        return error.duplicate_key;
+                    }
+                } else {
+                    gop.value_ptr.* = .{ .table = .{} };
+                    current_table = &gop.value_ptr.*.table;
+                }
+            }
+
+            const last_key_bounds = keys.items[keys.items.len - 1];
+            const last_key = try parser.output.getString(parser.getString(last_key_bounds));
+            const gop = try current_table.getOrPut(parser.output.allocator, last_key);
             if (gop.found_existing) {
                 return error.duplicate_key;
             } else {
                 gop.value_ptr.* = value;
             }
+
             try parser.skipWhitespace();
         }
 
@@ -518,24 +543,6 @@ fn Parser(comptime Reader: type) type {
     };
 }
 
-fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
-    std.debug.print("\nPRINTING ALL TOKENS:\n", .{});
-
-    var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
-    defer parser.deinit();
-
-    while (parser.current.kind != .eof) {
-        std.debug.print("FOUND: {any}", .{parser.current.kind});
-        switch (parser.current.val) {
-            .none => {},
-            .string => std.debug.print(" [{s}]", .{parser.getString(parser.current.val.string)}),
-        }
-        std.debug.print("\n", .{});
-
-        try parser.advance();
-    }
-}
-
 test "comment" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/comment.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
@@ -560,7 +567,7 @@ test "invalid 2" {
 test "invalid 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 3.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.zero_length_bare_key, err);
+    try std.testing.expectError(error.expected_newline, err); // TODO this error isn't good
 }
 
 test "invalid 4" {
@@ -612,23 +619,26 @@ test "empty keys 2" {
 }
 
 test "dotted keys 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 1.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqualSlices(u8, "Orange", toml.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "orange", toml.get("physical").?.table.get("color").?.string);
+    try std.testing.expectEqualSlices(u8, "round", toml.get("physical").?.table.get("shape").?.string);
+    try std.testing.expectEqual(true, toml.get("site").?.table.get("google.com").?.boolean);
 }
 
 test "dotted keys 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 2.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqualSlices(u8, "banana", toml.get("fruit").?.table.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "yellow", toml.get("fruit").?.table.get("color").?.string);
+    try std.testing.expectEqualSlices(u8, "banana", toml.get("fruit").?.table.get("flavor").?.string);
 }
 
 test "repeat keys 1" {
@@ -644,50 +654,56 @@ test "repeat keys 2" {
 }
 
 test "repeat keys 3" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 3.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqual(true, toml.get("fruit").?.table.get("apple").?.table.get("smooth").?.boolean);
+    try std.testing.expectEqual(@as(i64, 2), toml.get("fruit").?.table.get("orange").?.integer);
 }
 
 test "repeat keys 4" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 4.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.repeated_key, err);
+    try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "out of order 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 1.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqualSlices(u8, "fruit", toml.get("apple").?.table.get("type").?.string);
+    try std.testing.expectEqualSlices(u8, "fruit", toml.get("orange").?.table.get("type").?.string);
+    try std.testing.expectEqualSlices(u8, "thin", toml.get("apple").?.table.get("skin").?.string);
+    try std.testing.expectEqualSlices(u8, "thick", toml.get("orange").?.table.get("skin").?.string);
+    try std.testing.expectEqualSlices(u8, "red", toml.get("apple").?.table.get("color").?.string);
+    try std.testing.expectEqualSlices(u8, "orange", toml.get("orange").?.table.get("color").?.string);
 }
 
 test "out of order 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 2.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqualSlices(u8, "fruit", toml.get("apple").?.table.get("type").?.string);
+    try std.testing.expectEqualSlices(u8, "thin", toml.get("apple").?.table.get("skin").?.string);
+    try std.testing.expectEqualSlices(u8, "red", toml.get("apple").?.table.get("color").?.string);
+    try std.testing.expectEqualSlices(u8, "fruit", toml.get("orange").?.table.get("type").?.string);
+    try std.testing.expectEqualSlices(u8, "thick", toml.get("orange").?.table.get("skin").?.string);
+    try std.testing.expectEqualSlices(u8, "orange", toml.get("orange").?.table.get("color").?.string);
 }
 
 test "dotted keys not floats" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys not floats.toml"));
 
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqualSlices(u8, "blank", toml.get("").?.string);
+    try std.testing.expectEqualSlices(u8, "pi", toml.get("3").?.table.get("14159").?.string);
 }
 
 test "basic strings 1" {
