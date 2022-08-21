@@ -896,3 +896,21 @@ test "local time 1" {
 
     try std.testing.expectEqual(1, 0);
 }
+
+test "arrays 1" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 1.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqual(1, 0);
+}
+
+test "arrays 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 2.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqual(1, 0);
+}
