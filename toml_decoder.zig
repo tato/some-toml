@@ -120,12 +120,7 @@ fn Parser(comptime Reader: type) type {
                 value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
             } else return error.expected_value;
 
-            errdefer {
-                switch (value) {
-                    .boolean => {},
-                    .string => parser.output.allocator.free(value.string),
-                }
-            }
+            errdefer value.deinit(parser.output.allocator);
 
             const gop = try parser.output.root.getOrPut(parser.output.allocator, key);
             if (gop.found_existing) {
@@ -197,7 +192,7 @@ fn Parser(comptime Reader: type) type {
                     }
                     token.kind = .newline;
                 },
-                else => {
+                else => else_prong: {
                     if (isBareKeyChar(c)) {
                         try parser.stream.putBackByte(c);
 
@@ -212,9 +207,10 @@ fn Parser(comptime Reader: type) type {
                         } else if (std.mem.eql(u8, "false", string)) {
                             token.kind = .@"false";
                         }
-                    } else {
-                        std.log.err("FOUND UNEXPECTED CHARACTER: [{c}]", .{c});
+                        break :else_prong;
                     }
+
+                    std.log.err("FOUND UNEXPECTED CHARACTER: [{c}]", .{c});
                 },
             }
 
@@ -489,6 +485,7 @@ const TokenKind = enum {
     multi_line_basic_string,
     literal_string,
     multi_line_literal_string,
+    integer,
     @"true",
     @"false",
     lbracket,
@@ -743,4 +740,43 @@ test "multi-line literal strings 2" {
         \\Here are fifteen quotation marks: """""""""""""""
     , toml.get("quot15").?.string);
     try std.testing.expectEqualSlices(u8, "Here are fifteen apostrophes: '''''''''''''''", toml.get("apos15").?.string);
+}
+
+test "integers 1" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 1.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(99 == toml.get("int1").?.integer);
+    try std.testing.expect(42 == toml.get("int2").?.integer);
+    try std.testing.expect(0 == toml.get("int3").?.integer);
+    try std.testing.expect(-17 == toml.get("int4").?.integer);
+    try std.testing.expect(-11 == toml.get("-11").?.integer);
+}
+
+test "integers 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 2.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(1_000 == toml.get("int5").?.integer);
+    try std.testing.expect(5_349_221 == toml.get("int6").?.integer);
+    try std.testing.expect(53_49_221 == toml.get("int7").?.integer);
+    try std.testing.expect(1_2_3_4_5 == toml.get("int8").?.integer);
+}
+
+test "integers 3" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 3.toml"));
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(0xDEADBEEF == toml.get("hex1").?.integer);
+    try std.testing.expect(0xdeadbeef == toml.get("hex2").?.integer);
+    try std.testing.expect(0xdead_beef == toml.get("hex3").?.integer);
+    try std.testing.expect(0o01234567 == toml.get("oct1").?.integer);
+    try std.testing.expect(0o755 == toml.get("oct1").?.integer);
+    try std.testing.expect(0b11010110 == toml.get("bin1").?.integer);
 }

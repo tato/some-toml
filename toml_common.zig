@@ -20,10 +20,12 @@ pub const Toml = struct {
 pub const Value = union(enum) {
     boolean: bool,
     string: []const u8,
+    integer: i64,
 
-    fn deinit(value: *Value, allocator: std.mem.Allocator) void {
+    // TODO don't expose in API
+    pub fn deinit(value: *Value, allocator: std.mem.Allocator) void {
         switch (value.*) {
-            .boolean => {},
+            .boolean, .integer => {},
             .string => allocator.free(value.string),
         }
         value.* = undefined;
