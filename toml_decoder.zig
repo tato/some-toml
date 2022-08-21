@@ -12,26 +12,29 @@ pub fn decode(allocator: std.mem.Allocator, reader: anytype) DecodeError!common.
 
 pub const DecodeError = std.mem.Allocator.Error || error{
     io_error,
+    invalid_newline,
     unexpected_eof,
-    unexpected_character,
-    unexpected_token,
+    expected_equals,
+    expected_newline,
     expected_value,
-    invalid_newline_in_basic_string,
+    unexpected_bare_key,
+    duplicate_key,
+    unexpected_multi_line_string,
     invalid_control_in_basic_string,
+    invalid_newline_in_basic_string,
+    zero_length_bare_key,
     invalid_escape_sequence,
+    unexpected_character,
     invalid_char_in_unicode_escape_sequence,
     invalid_unicode_scalar_in_escape_sequence,
-    repeated_key,
 };
 
 fn Parser(comptime Reader: type) type {
     return struct {
         const lookahead = 2;
-        const Stream = std.io.PeekStream(.{ .Static = lookahead }, Reader);
+        const Stream = std.io.PeekStream(.{ .Static = 2 }, Reader);
 
         allocator: std.mem.Allocator,
-        previous: Token = undefined,
-        current: Token = undefined,
 
         stream: Stream,
         strings: std.ArrayListUnmanaged(u8) = .{},
@@ -40,9 +43,8 @@ fn Parser(comptime Reader: type) type {
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !@This() {
             const output = common.Toml{ .allocator = allocator };
-            const peekable = std.io.peekStream(lookahead, reader);
+            const peekable = Stream.init(reader);
             var parser = @This(){ .allocator = allocator, .stream = peekable, .output = output };
-            try parser.advance();
             return parser;
         }
 
@@ -55,166 +57,100 @@ fn Parser(comptime Reader: type) type {
             errdefer parser.output.deinit();
 
             while (true) {
-                if (try parser.match(.bare_key)) {
-                    try parser.parseKvPair();
-                } else if (try parser.match(.basic_string)) {
-                    try parser.parseKvPair();
-                } else if (try parser.match(.literal_string)) {
-                    try parser.parseKvPair();
-                }
+                try parser.skipWhitespace();
+                try parser.matchKeyValuePair();
+                const found_newline = try parser.matchNewLine();
 
-                if (try parser.match(.newline)) {} else {
-                    break;
-                }
+                const c = try parser.readByte();
+                if (c) |b| {
+                    if (!found_newline) return error.expected_newline else try parser.stream.putBackByte(b);
+                } else break;
             }
-
-            try parser.consume(.eof, "Expected eof.");
 
             return parser.output;
         }
 
-        fn check(parser: *@This(), kind: TokenKind) bool {
-            return parser.current.kind == kind;
-        }
+        fn matchKeyValuePair(parser: *@This()) !void {
+            var key: []const u8 = undefined;
+            var value: common.Value = undefined;
 
-        fn match(parser: *@This(), kind: TokenKind) !bool {
-            if (!parser.check(kind)) return false;
-            try parser.advance();
-            return true;
-        }
+            {
+                const c = (try parser.readByte()) orelse return;
 
-        fn advance(parser: *@This()) !void {
-            parser.previous = parser.current;
-            parser.current = try parser.nextToken();
-            if (parser.current.kind == .err) return error.unexpected_token;
-        }
+                if (c == '\r' or c == '\n') {
+                    try parser.stream.putBackByte(c);
+                    return;
+                }
 
-        fn consume(parser: *@This(), kind: TokenKind, message: []const u8) !void {
-            if (parser.current.kind == kind) {
-                try parser.advance();
-                return;
+                if (c == '"') {
+                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
+                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
+                } else if (c == '\'') {
+                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
+                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
+                } else {
+                    try parser.stream.putBackByte(c);
+                    const bounds = try parser.tokenizeBareKey();
+                    key = try parser.output.allocator.dupe(u8, parser.getString(bounds));
+                }
             }
-
-            std.log.debug("{s}", .{message});
-            return error.unexpected_token;
-        }
-
-        fn parseKvPair(parser: *@This()) !void {
-            const key = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string));
             errdefer parser.output.allocator.free(key);
 
-            try parser.consume(.equals, "Expected '=' after key.");
+            {
+                try parser.skipWhitespace();
+                const c = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (c != '=') return error.expected_equals;
+                try parser.skipWhitespace();
+            }
 
-            var value: common.Value = undefined;
-            if (try parser.match(.@"true")) {
-                value = .{ .boolean = true };
-            } else if (try parser.match(.@"false")) {
-                value = .{ .boolean = false };
-            } else if (try parser.match(.basic_string)) {
-                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
-            } else if (try parser.match(.multi_line_basic_string)) {
-                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
-            } else if (try parser.match(.literal_string)) {
-                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
-            } else if (try parser.match(.multi_line_literal_string)) {
-                value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(parser.previous.val.string)) };
-            } else return error.expected_value;
+            {
+                const c = (try parser.readByte()) orelse return error.unexpected_eof;
 
+                if (c == '"') {
+                    const bounds = try parser.tokenizeBasicString(.allow_multi);
+                    value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(bounds)) };
+                } else if (c == '\'') {
+                    const bounds = try parser.tokenizeLiteralString(.allow_multi);
+                    value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(bounds)) };
+                } else {
+                    try parser.stream.putBackByte(c);
+
+                    const bounds = try (parser.tokenizeBareKey() catch |e| switch (e) {
+                        error.zero_length_bare_key => error.expected_value,
+                        else => e,
+                    });
+                    const string = parser.getString(bounds);
+                    if (std.mem.eql(u8, "true", string)) {
+                        value = .{ .boolean = true };
+                    } else if (std.mem.eql(u8, "false", string)) {
+                        value = .{ .boolean = false };
+                    } else {
+                        return error.unexpected_bare_key;
+                    }
+                }
+            }
             errdefer value.deinit(parser.output.allocator);
 
             const gop = try parser.output.root.getOrPut(parser.output.allocator, key);
             if (gop.found_existing) {
-                return error.repeated_key;
+                return error.duplicate_key;
             } else {
                 gop.value_ptr.* = value;
             }
+            try parser.skipWhitespace();
         }
 
-        fn nextToken(parser: *@This()) !Token {
-            var token = Token{ .kind = .err };
-
-            try parser.skipWhitespace();
-
-            const c = (try parser.readByte()) orelse {
-                token.kind = .eof;
-                return token;
-            };
-
-            switch (c) {
-                '#' => {
-                    try parser.skipComment();
-                    token.kind = .newline;
-                },
-                '[' => token.kind = .lbracket,
-                ']' => token.kind = .rbracket,
-                '=' => token.kind = .equals,
-                '"' => {
-                    const next = try parser.readByte();
-                    const nextnext = try parser.readByte();
-                    if (next != null and next.? == '"' and nextnext != null and nextnext.? == '"') {
-                        const bounds = try parser.tokenizeMultiLineBasicString();
-                        token.kind = .multi_line_basic_string;
-                        token.val = .{ .string = bounds };
-                    } else {
-                        if (nextnext) |nn| try parser.stream.putBackByte(nn);
-                        if (next) |n| try parser.stream.putBackByte(n);
-
-                        const bounds = try parser.tokenizeBasicString();
-                        token.kind = .basic_string;
-                        token.val = .{ .string = bounds };
-                    }
-                },
-                '\'' => {
-                    const next = try parser.readByte();
-                    const nextnext = try parser.readByte();
-                    if (next != null and next.? == '\'' and nextnext != null and nextnext.? == '\'') {
-                        const bounds = try parser.tokenizeMultiLineLiteralString();
-                        token.kind = .multi_line_literal_string;
-                        token.val = .{ .string = bounds };
-                    } else {
-                        if (nextnext) |nn| try parser.stream.putBackByte(nn);
-                        if (next) |n| try parser.stream.putBackByte(n);
-
-                        const bounds = try parser.tokenizeLiteralString();
-                        token.kind = .literal_string;
-                        token.val = .{ .string = bounds };
-                    }
-                },
-                '\n' => token.kind = .newline,
-                '\r' => {
-                    const nl = (try parser.readByte()) orelse {
-                        std.log.err("Expected '\\n' after '\\r' but found EOF.", .{});
-                        return error.unexpected_eof;
-                    };
-                    if (nl != '\n') {
-                        std.log.err("Expected '\\n' after '\\r' but found '{c}'.", .{nl});
-                        return error.unexpected_character;
-                    }
-                    token.kind = .newline;
-                },
-                else => else_prong: {
-                    if (isBareKeyChar(c)) {
-                        try parser.stream.putBackByte(c);
-
-                        const bounds = try parser.tokenizeBareKey();
-                        const string = parser.getString(bounds);
-
-                        token.val = .{ .string = bounds };
-                        token.kind = .bare_key;
-
-                        if (std.mem.eql(u8, "true", string)) {
-                            token.kind = .@"true";
-                        } else if (std.mem.eql(u8, "false", string)) {
-                            token.kind = .@"false";
-                        }
-                        break :else_prong;
-                    }
-
-                    std.log.err("FOUND UNEXPECTED CHARACTER: [{c}]", .{c});
-                },
+        fn matchNewLine(parser: *@This()) !bool {
+            const nl = (try parser.readByte()) orelse return false;
+            if (nl == '\n') return true;
+            if (nl == '\r') {
+                const maybe_nlnl = try parser.readByte();
+                if (maybe_nlnl) |nlnl| {
+                    return if (nlnl == '\n') true else error.invalid_newline;
+                } else return error.unexpected_eof;
             }
-
-            return token;
+            try parser.stream.putBackByte(nl);
+            return false;
         }
 
         fn readByte(parser: *@This()) !?u8 {
@@ -228,7 +164,7 @@ fn Parser(comptime Reader: type) type {
             return std.ascii.isAlNum(c) or c == '_' or c == '-';
         }
 
-        fn tokenizeBareKey(parser: *@This()) !Token.StringBounds {
+        fn tokenizeBareKey(parser: *@This()) !StringBounds {
             const start = parser.strings.items.len;
 
             while (true) {
@@ -247,49 +183,34 @@ fn Parser(comptime Reader: type) type {
                 }
             }
 
-            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+            const len = parser.strings.items.len - start;
+            if (len == 0) return error.zero_length_bare_key;
+            return StringBounds{ .start = start, .len = len };
         }
 
-        fn tokenizeBasicString(parser: *@This()) !Token.StringBounds {
+        const AllowMulti = enum(u1) { disallow_multi, allow_multi };
+
+        fn tokenizeBasicString(parser: *@This(), allow_multi: AllowMulti) !StringBounds {
             const start = parser.strings.items.len;
 
-            while (true) {
-                var c = (try parser.readByte()) orelse return error.unexpected_eof;
-
-                if (c == '"') break;
-
-                if (c == '\n') return error.invalid_newline_in_basic_string;
-                if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
-
-                if (c == '\\') {
-                    c = (try parser.readByte()) orelse return error.unexpected_eof;
-                    switch (c) {
-                        '"', '\\' => try parser.strings.append(parser.allocator, c),
-                        'b' => try parser.strings.append(parser.allocator, std.ascii.control_code.BS),
-                        't' => try parser.strings.append(parser.allocator, '\t'),
-                        'n' => try parser.strings.append(parser.allocator, '\n'),
-                        'f' => try parser.strings.append(parser.allocator, std.ascii.control_code.FF),
-                        'r' => try parser.strings.append(parser.allocator, '\r'),
-                        'u' => try parser.tokenizeUnicodeSequence(4),
-                        'U' => try parser.tokenizeUnicodeSequence(8),
-                        else => return error.invalid_escape_sequence,
-                    }
-                } else {
-                    try parser.strings.append(parser.allocator, c);
+            const is_multi = check_multi: {
+                const c = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (c == '"') check_multi_inner: {
+                    const cc = (try parser.readByte()) orelse break :check_multi_inner;
+                    if (cc == '"') break :check_multi true;
+                    try parser.stream.putBackByte(cc);
                 }
-            }
+                try parser.stream.putBackByte(c);
+                break :check_multi false;
+            };
 
-            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
-        }
+            if (is_multi and allow_multi == .disallow_multi) return error.unexpected_multi_line_string;
 
-        fn tokenizeMultiLineBasicString(parser: *@This()) !Token.StringBounds {
-            const start = parser.strings.items.len;
-
-            trim_newline: {
+            if (is_multi) trim_newline: {
                 const trim_a = (try parser.readByte()) orelse break :trim_newline;
                 if (trim_a == '\n') break :trim_newline;
-                if (trim_a == '\r') inner_trim_newline: {
-                    const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
+                if (trim_a == '\r') trim_newline_inner: {
+                    const trim_b = (try parser.readByte()) orelse break :trim_newline_inner;
                     if (trim_b == '\n') break :trim_newline;
                     try parser.stream.putBackByte(trim_b);
                 }
@@ -299,16 +220,25 @@ fn Parser(comptime Reader: type) type {
             while (true) {
                 var c = (try parser.readByte()) orelse return error.unexpected_eof;
 
-                if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
-
-                if (c == '"') check_end: {
-                    const next = (try parser.readByte()) orelse break :check_end;
-                    if (next == '"') inner_check_end: {
-                        const nextnext = (try parser.readByte()) orelse break :inner_check_end;
-                        if (nextnext == '"') break;
-                        try parser.stream.putBackByte(nextnext);
+                if (is_multi) {
+                    if (c == '"') check_end: {
+                        const next = (try parser.readByte()) orelse break :check_end;
+                        if (next == '"') inner_check_end: {
+                            const nextnext = (try parser.readByte()) orelse break :inner_check_end;
+                            if (nextnext == '"') break;
+                            try parser.stream.putBackByte(nextnext);
+                        }
+                        try parser.stream.putBackByte(next);
                     }
-                    try parser.stream.putBackByte(next);
+                } else {
+                    if (c == '"') break;
+                }
+
+                if (is_multi) {
+                    if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
+                } else {
+                    if (c == '\n') return error.invalid_newline_in_basic_string;
+                    if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
                 }
 
                 if (c == '\\') {
@@ -323,6 +253,8 @@ fn Parser(comptime Reader: type) type {
                         'u' => try parser.tokenizeUnicodeSequence(4),
                         'U' => try parser.tokenizeUnicodeSequence(8),
                         ' ', '\t', '\r', '\n' => {
+                            if (!is_multi) return error.invalid_escape_sequence;
+
                             var found_the_newline = c == '\n';
                             if (c == '\r') {
                                 c = (try parser.readByte()) orelse return error.unexpected_eof;
@@ -364,60 +296,66 @@ fn Parser(comptime Reader: type) type {
                 }
             }
 
-            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+            return StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
-        fn tokenizeLiteralString(parser: *@This()) !Token.StringBounds {
+        fn tokenizeLiteralString(parser: *@This(), allow_multi: AllowMulti) !StringBounds {
             const start = parser.strings.items.len;
 
-            while (true) {
-                var c = (try parser.readByte()) orelse return error.unexpected_eof;
-
-                if (c == '\'') break;
-
-                // TODO in_literal_string or in_single_line_string
-                if (c == '\n') return error.invalid_newline_in_basic_string;
-                if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
-
-                try parser.strings.append(parser.allocator, c);
-            }
-
-            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
-        }
-
-        fn tokenizeMultiLineLiteralString(parser: *@This()) !Token.StringBounds {
-            const start = parser.strings.items.len;
-
-            trim_newline: {
-                const trim_a = (try parser.readByte()) orelse break :trim_newline;
-                if (trim_a == '\n') break :trim_newline;
-                if (trim_a == '\r') inner_trim_newline: {
-                    const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
-                    if (trim_b == '\n') break :trim_newline;
-                    try parser.stream.putBackByte(trim_b);
+            const is_multi = check_multi: {
+                const c = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (c == '\'') check_multi_inner: {
+                    const cc = (try parser.readByte()) orelse break :check_multi_inner;
+                    if (cc == '\'') break :check_multi true;
+                    try parser.stream.putBackByte(cc);
                 }
-                try parser.stream.putBackByte(trim_a);
-            }
+                try parser.stream.putBackByte(c);
+                break :check_multi false;
+            };
 
-            while (true) {
-                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+            if (is_multi and allow_multi == .disallow_multi) return error.unexpected_multi_line_string;
 
-                if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
-
-                if (c == '\'') check_end: {
-                    const next = (try parser.readByte()) orelse break :check_end;
-                    if (next == '\'') inner_check_end: {
-                        const nextnext = (try parser.readByte()) orelse break :inner_check_end;
-                        if (nextnext == '\'') break;
-                        try parser.stream.putBackByte(nextnext);
+            if (is_multi) {
+                trim_newline: {
+                    const trim_a = (try parser.readByte()) orelse break :trim_newline;
+                    if (trim_a == '\n') break :trim_newline;
+                    if (trim_a == '\r') inner_trim_newline: {
+                        const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
+                        if (trim_b == '\n') break :trim_newline;
+                        try parser.stream.putBackByte(trim_b);
                     }
-                    try parser.stream.putBackByte(next);
+                    try parser.stream.putBackByte(trim_a);
+                }
+            }
+
+            while (true) {
+                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+
+                if (is_multi) {
+                    if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
+                } else {
+                    if (c == '\n') return error.invalid_newline_in_basic_string;
+                    if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
+                }
+
+                if (is_multi) {
+                    if (c == '\'') check_end: {
+                        const next = (try parser.readByte()) orelse break :check_end;
+                        if (next == '\'') inner_check_end: {
+                            const nextnext = (try parser.readByte()) orelse break :inner_check_end;
+                            if (nextnext == '\'') break;
+                            try parser.stream.putBackByte(nextnext);
+                        }
+                        try parser.stream.putBackByte(next);
+                    }
+                } else {
+                    if (c == '\'') break;
                 }
 
                 try parser.strings.append(parser.allocator, c);
             }
 
-            return Token.StringBounds{ .start = start, .len = parser.strings.items.len - start };
+            return StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
         fn tokenizeUnicodeSequence(parser: *@This(), comptime len: u8) !void {
@@ -445,55 +383,34 @@ fn Parser(comptime Reader: type) type {
 
         fn skipComment(parser: *@This()) !void {
             while (true) {
-                const c = try parser.readByte();
-                if (c == null or c.? == 0x0A) break;
+                const found_newline = try parser.matchNewLine();
+                if (found_newline) {
+                    try parser.stream.putBackByte('\n');
+                    break;
+                } else {
+                    const c = try parser.readByte();
+                    if (c == null) break;
+                }
             }
         }
 
         fn skipWhitespace(parser: *@This()) !void {
             var c = (try parser.readByte()) orelse return;
             while (c == ' ' or c == '\t') : (c = (try parser.readByte()) orelse return) {}
-            try parser.stream.putBackByte(c);
+            if (c == '#') try parser.skipComment() else try parser.stream.putBackByte(c);
         }
 
-        fn getString(parser: *@This(), bounds: Token.StringBounds) []const u8 {
+        fn getString(parser: *@This(), bounds: StringBounds) []const u8 {
             std.debug.assert(parser.strings.items.len >= bounds.start + bounds.len);
             return parser.strings.items[bounds.start .. bounds.start + bounds.len];
         }
+
+        const StringBounds = struct {
+            start: usize,
+            len: usize,
+        };
     };
 }
-
-const Token = struct {
-    kind: TokenKind,
-    val: Value = .{ .none = {} },
-
-    const Value = union(enum) {
-        none: void,
-        string: StringBounds,
-    };
-
-    const StringBounds = struct {
-        start: usize,
-        len: usize,
-    };
-};
-
-const TokenKind = enum {
-    newline,
-    bare_key,
-    basic_string,
-    multi_line_basic_string,
-    literal_string,
-    multi_line_literal_string,
-    integer,
-    @"true",
-    @"false",
-    lbracket,
-    rbracket,
-    equals,
-    eof,
-    err,
-};
 
 fn debugPrintAllTokens(allocator: std.mem.Allocator, reader: anytype) !void {
     std.debug.print("\nPRINTING ALL TOKENS:\n", .{});
@@ -525,19 +442,25 @@ test "comment" {
 test "invalid 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 1.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.expected_value, err);
+    try std.testing.expectError(error.unexpected_eof, err);
 }
 
 test "invalid 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 2.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.unexpected_token, err);
+    try std.testing.expectError(error.expected_newline, err);
 }
 
 test "invalid 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 3.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.unexpected_token, err);
+    try std.testing.expectError(error.zero_length_bare_key, err);
+}
+
+test "invalid 4" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 4.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.expected_value, err);
 }
 
 test "bare keys" {
@@ -605,13 +528,13 @@ test "dotted keys 2" {
 test "repeat keys 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 1.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.repeated_key, err);
+    try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "repeat keys 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 2.toml"));
     const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.repeated_key, err);
+    try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "repeat keys 3" {
