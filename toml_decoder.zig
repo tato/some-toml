@@ -112,7 +112,24 @@ fn Parser(comptime Reader: type) type {
                 } else if (c == '\'') {
                     const bounds = try parser.tokenizeLiteralString(.allow_multi);
                     value = .{ .string = try parser.output.allocator.dupe(u8, parser.getString(bounds)) };
-                } else {
+                } else else_prong: {
+                    if (std.ascii.isDigit(c)) {
+                        try parser.stream.putBackByte(c);
+                        value = try parser.tokenizeNumber();
+                        break :else_prong;
+                    }
+
+                    if (c == '-' or c == '+') {
+                        const d = try parser.readByte();
+                        if (d != null and std.ascii.isDigit(d.?)) {
+                            try parser.stream.putBackByte(d.?);
+                            try parser.stream.putBackByte(c);
+                            value = try parser.tokenizeNumber();
+                            break :else_prong;
+                        }
+                        if (d) |b| try parser.stream.putBackByte(b);
+                    }
+
                     try parser.stream.putBackByte(c);
 
                     const bounds = try (parser.tokenizeBareKey() catch |e| switch (e) {
@@ -379,6 +396,44 @@ fn Parser(comptime Reader: type) type {
                 => return error.invalid_unicode_scalar_in_escape_sequence,
             };
             try parser.strings.appendSlice(parser.allocator, utf8_buf[0..utf8_len]);
+        }
+
+        fn tokenizeNumber(parser: *@This()) !common.Value {
+            const sign_char = (try parser.readByte()) orelse return error.unexpected_eof;
+            const negative = if (sign_char == '-') true else if (sign_char == '+') false else else_prong: {
+                try parser.stream.putBackByte(sign_char);
+                break :else_prong false;
+            };
+
+            const base = 10;
+
+            var number_buf = std.ArrayList(u8).init(parser.allocator);
+            defer number_buf.deinit();
+
+            var c = (try parser.readByte()) orelse return error.unexpected_eof;
+            std.debug.assert(std.ascii.isDigit(c));
+            while (true) {
+                if (std.ascii.isDigit(c)) {
+                    try number_buf.append(c - '0');
+                } else if (c != '_') {
+                    try parser.stream.putBackByte(c);
+                    break;
+                }
+                c = (try parser.readByte()) orelse break;
+            }
+
+            var scale: i64 = std.math.pow(i64, base, @intCast(i64, number_buf.items.len));
+            var number: i64 = 0;
+            for (number_buf.items) |n| {
+                scale = @divExact(scale, base);
+                number += n * scale;
+            }
+
+            if (negative) {
+                number = -number;
+            }
+
+            return common.Value{ .integer = number };
         }
 
         fn skipComment(parser: *@This()) !void {
@@ -666,7 +721,6 @@ test "multi-line literal strings 2" {
 }
 
 test "integers 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 1.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
