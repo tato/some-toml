@@ -405,16 +405,46 @@ fn Parser(comptime Reader: type) type {
                 break :else_prong false;
             };
 
-            const base = 10;
+            const base: i64 = base: {
+                const base_zero = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (base_zero == '0') {
+                    const maybe_base_char = try parser.readByte();
+                    if (maybe_base_char) |base_char| {
+                        switch (base_char) {
+                            'x' => break :base 16,
+                            'o' => break :base 8,
+                            'b' => break :base 2,
+                            else => {},
+                        }
+                        try parser.stream.putBackByte(base_char);
+                    }
+                }
+                try parser.stream.putBackByte(base_zero);
+                break :base 10;
+            };
+
+            const valid_fn = &switch (base) {
+                16 => isHexDigit,
+                10 => std.ascii.isDigit,
+                8 => isOctalDigit,
+                2 => isBinDigit,
+                else => unreachable,
+            };
+
+            const value_fn = &switch (base) {
+                16 => hexValue,
+                10, 8, 2 => digitValue,
+                else => unreachable,
+            };
 
             var number_buf = std.ArrayList(u8).init(parser.allocator);
             defer number_buf.deinit();
 
             var c = (try parser.readByte()) orelse return error.unexpected_eof;
-            std.debug.assert(std.ascii.isDigit(c));
+            std.debug.assert(valid_fn(c));
             while (true) {
-                if (std.ascii.isDigit(c)) {
-                    try number_buf.append(c - '0');
+                if (valid_fn(c)) {
+                    try number_buf.append(c);
                 } else if (c != '_') {
                     try parser.stream.putBackByte(c);
                     break;
@@ -426,7 +456,7 @@ fn Parser(comptime Reader: type) type {
             var number: i64 = 0;
             for (number_buf.items) |n| {
                 scale = @divExact(scale, base);
-                number += n * scale;
+                number += value_fn(n) * scale;
             }
 
             if (negative) {
@@ -434,6 +464,27 @@ fn Parser(comptime Reader: type) type {
             }
 
             return common.Value{ .integer = number };
+        }
+
+        fn hexValue(c: u8) u8 {
+            return if (std.ascii.isDigit(c)) c - '0' else std.ascii.toLower(c) - 'a' + 10;
+        }
+
+        fn digitValue(c: u8) u8 {
+            return c - '0';
+        }
+
+        fn isHexDigit(c: u8) bool {
+            const lower_c = std.ascii.toLower(c);
+            return std.ascii.isDigit(c) or (lower_c >= 'a' and lower_c <= 'f');
+        }
+
+        fn isOctalDigit(c: u8) bool {
+            return c >= '0' and c <= '7';
+        }
+
+        fn isBinDigit(c: u8) bool {
+            return c == '0' or c == '1';
         }
 
         fn skipComment(parser: *@This()) !void {
@@ -733,7 +784,6 @@ test "integers 1" {
 }
 
 test "integers 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 2.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
@@ -745,7 +795,6 @@ test "integers 2" {
 }
 
 test "integers 3" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 3.toml"));
     var toml = try decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
@@ -754,6 +803,6 @@ test "integers 3" {
     try std.testing.expect(0xdeadbeef == toml.get("hex2").?.integer);
     try std.testing.expect(0xdead_beef == toml.get("hex3").?.integer);
     try std.testing.expect(0o01234567 == toml.get("oct1").?.integer);
-    try std.testing.expect(0o755 == toml.get("oct1").?.integer);
+    try std.testing.expect(0o755 == toml.get("oct2").?.integer);
     try std.testing.expect(0b11010110 == toml.get("bin1").?.integer);
 }
