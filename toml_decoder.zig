@@ -76,6 +76,8 @@ fn Parser(comptime Reader: type) type {
                         const right_bracket = (try parser.readByte()) orelse return error.unexpected_eof;
                         if (right_bracket != ']') return error.expected_right_bracket;
 
+                        try parser.skipWhitespace();
+
                         var current_table = &parser.output.root;
                         for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
                             const key = try parser.output.getString(parser.getString(key_bounds));
@@ -1036,8 +1038,61 @@ test "tables 5" {
 }
 
 test "tables 6" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 6.toml"));
-    const err = decode(std.testing.allocator, stream.reader());
-    try std.testing.expectError(error.duplicate_key, err);
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(toml.get("x").?.table.get("y").?.table.get("z").?.table.get("w").? == .table);
+    try std.testing.expect(toml.get("x").? == .table);
+}
+
+test "tables 7" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 7.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(false);
+}
+
+test "tables 8" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 8.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(false);
+}
+
+test "tables 9" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 9.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(false);
+}
+
+test "tables 10" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 10.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(false);
+}
+
+test "tables 11" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 11.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(false);
 }
