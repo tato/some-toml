@@ -16,7 +16,9 @@ pub const DecodeError = std.mem.Allocator.Error || error{
     unexpected_eof,
     expected_equals,
     expected_newline,
+    expected_key,
     expected_value,
+    expected_right_bracket,
     unexpected_bare_key,
     duplicate_key,
     unexpected_multi_line_string,
@@ -40,11 +42,12 @@ fn Parser(comptime Reader: type) type {
         strings: std.ArrayListUnmanaged(u8) = .{},
 
         output: common.Toml,
+        current_table: *common.Value.Table,
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !@This() {
             const output = common.Toml{ .allocator = allocator };
             const peekable = Stream.init(reader);
-            var parser = @This(){ .allocator = allocator, .stream = peekable, .output = output };
+            var parser = @This(){ .allocator = allocator, .stream = peekable, .output = output, .current_table = undefined };
             return parser;
         }
 
@@ -54,10 +57,47 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn parse(parser: *@This()) !common.Toml {
+            parser.current_table = &parser.output.root;
             errdefer parser.output.deinit();
 
             while (true) {
                 try parser.skipWhitespace();
+
+                const maybe_open_bracket = try parser.readByte();
+                if (maybe_open_bracket) |open_bracket| {
+                    if (open_bracket == '[') {
+                        try parser.skipWhitespace();
+
+                        const key_segments = (try parser.parseKey()) orelse return error.expected_key;
+                        defer parser.allocator.free(key_segments);
+
+                        try parser.skipWhitespace();
+
+                        const right_bracket = (try parser.readByte()) orelse return error.unexpected_eof;
+                        if (right_bracket != ']') return error.expected_right_bracket;
+
+                        var current_table = &parser.output.root;
+                        for (key_segments) |key_bounds| {
+                            const key = try parser.output.getString(parser.getString(key_bounds));
+                            const gop = try current_table.getOrPut(parser.output.allocator, key);
+                            if (gop.found_existing) {
+                                if (gop.value_ptr.* == .table) {
+                                    current_table = &gop.value_ptr.*.table;
+                                } else {
+                                    return error.duplicate_key;
+                                }
+                            } else {
+                                gop.value_ptr.* = .{ .table = .{} };
+                                current_table = &gop.value_ptr.*.table;
+                            }
+                        }
+
+                        parser.current_table = current_table;
+                    } else {
+                        try parser.stream.putBackByte(open_bracket);
+                    }
+                }
+
                 try parser.matchKeyValuePair();
                 const found_newline = try parser.matchNewLine();
 
@@ -71,37 +111,11 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn matchKeyValuePair(parser: *@This()) !void {
-            var keys = std.ArrayList(StringBounds).init(parser.allocator);
-            defer keys.deinit();
+            const maybe_key_segments = try parser.parseKey();
+            const key_segments = maybe_key_segments orelse return;
+            defer parser.allocator.free(key_segments);
+
             var value: common.Value = undefined;
-
-            while (true) {
-                const c = (try parser.readByte()) orelse return;
-
-                if (c == '"') {
-                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
-                    try keys.append(bounds);
-                } else if (c == '\'') {
-                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
-                    try keys.append(bounds);
-                } else if (isBareKeyChar(c)) {
-                    try parser.stream.putBackByte(c);
-                    const bounds = try parser.tokenizeBareKey();
-                    try keys.append(bounds);
-                } else {
-                    try parser.stream.putBackByte(c);
-                    return;
-                }
-
-                try parser.skipWhitespace();
-                const dot_char = (try parser.readByte()) orelse return error.unexpected_eof;
-                if (dot_char == '.') {
-                    try parser.skipWhitespace();
-                } else {
-                    try parser.stream.putBackByte(dot_char);
-                    break;
-                }
-            }
 
             {
                 const c = (try parser.readByte()) orelse return error.unexpected_eof;
@@ -154,8 +168,8 @@ fn Parser(comptime Reader: type) type {
             }
             errdefer value.deinit(parser.output.allocator);
 
-            var current_table = &parser.output.root;
-            for (keys.items[0 .. keys.items.len - 1]) |key_bounds| {
+            var current_table = parser.current_table;
+            for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
                 const key = try parser.output.getString(parser.getString(key_bounds));
                 const gop = try current_table.getOrPut(parser.output.allocator, key);
                 if (gop.found_existing) {
@@ -170,9 +184,9 @@ fn Parser(comptime Reader: type) type {
                 }
             }
 
-            const last_key_bounds = keys.items[keys.items.len - 1];
-            const last_key = try parser.output.getString(parser.getString(last_key_bounds));
-            const gop = try current_table.getOrPut(parser.output.allocator, last_key);
+            const key_bounds = key_segments[key_segments.len - 1];
+            const key = try parser.output.getString(parser.getString(key_bounds));
+            const gop = try current_table.getOrPut(parser.output.allocator, key);
             if (gop.found_existing) {
                 return error.duplicate_key;
             } else {
@@ -180,6 +194,41 @@ fn Parser(comptime Reader: type) type {
             }
 
             try parser.skipWhitespace();
+        }
+
+        fn parseKey(parser: *@This()) !?[]const StringBounds {
+            var segments = std.ArrayList(StringBounds).init(parser.allocator);
+            errdefer segments.deinit();
+
+            while (true) {
+                const c = (try parser.readByte()) orelse return null;
+
+                if (c == '"') {
+                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
+                    try segments.append(bounds);
+                } else if (c == '\'') {
+                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
+                    try segments.append(bounds);
+                } else if (isBareKeyChar(c)) {
+                    try parser.stream.putBackByte(c);
+                    const bounds = try parser.tokenizeBareKey();
+                    try segments.append(bounds);
+                } else {
+                    try parser.stream.putBackByte(c);
+                    return null;
+                }
+
+                try parser.skipWhitespace();
+                const dot_char = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (dot_char == '.') {
+                    try parser.skipWhitespace();
+                } else {
+                    try parser.stream.putBackByte(dot_char);
+                    break;
+                }
+            }
+
+            return segments.toOwnedSlice();
         }
 
         fn matchNewLine(parser: *@This()) !bool {
@@ -929,4 +978,25 @@ test "arrays 2" {
     defer toml.deinit();
 
     try std.testing.expectEqual(1, 0);
+}
+
+test "tables 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 1.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "some string", toml.get("table-1").?.table.get("key1").?.string);
+    try std.testing.expectEqual(@as(i64, 123), toml.get("table-1").?.table.get("key2").?.integer);
+    try std.testing.expectEqualSlices(u8, "another string", toml.get("table-2").?.table.get("key1").?.string);
+    try std.testing.expectEqual(@as(i64, 456), toml.get("table-2").?.table.get("key2").?.integer);
+}
+
+test "tables 2" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 2.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expectEqualSlices(u8, "pug", toml.get("dog").?.table.get("tater.man").?.table.get("type").?.table.get("name").?.string);
 }

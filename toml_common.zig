@@ -36,7 +36,7 @@ pub const Value = union(enum) {
     list: []const Value,
     table: Table,
 
-    const Table = std.StringHashMapUnmanaged(Value);
+    pub const Table = std.StringHashMapUnmanaged(Value);
 
     // TODO don't expose in API
     pub fn deinit(value: *Value, allocator: std.mem.Allocator) void {
