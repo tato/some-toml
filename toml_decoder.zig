@@ -77,7 +77,7 @@ fn Parser(comptime Reader: type) type {
                         if (right_bracket != ']') return error.expected_right_bracket;
 
                         var current_table = &parser.output.root;
-                        for (key_segments) |key_bounds| {
+                        for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
                             const key = try parser.output.getString(parser.getString(key_bounds));
                             const gop = try current_table.getOrPut(parser.output.allocator, key);
                             if (gop.found_existing) {
@@ -90,6 +90,16 @@ fn Parser(comptime Reader: type) type {
                                 gop.value_ptr.* = .{ .table = .{} };
                                 current_table = &gop.value_ptr.*.table;
                             }
+                        }
+
+                        const key_bounds = key_segments[key_segments.len - 1];
+                        const key = try parser.output.getString(parser.getString(key_bounds));
+                        const gop = try current_table.getOrPut(parser.output.allocator, key);
+                        if (gop.found_existing) {
+                            return error.duplicate_key;
+                        } else {
+                            gop.value_ptr.* = .{ .table = .{} };
+                            current_table = &gop.value_ptr.*.table;
                         }
 
                         parser.current_table = current_table;
@@ -999,4 +1009,16 @@ test "tables 2" {
     defer toml.deinit();
 
     try std.testing.expectEqualSlices(u8, "pug", toml.get("dog").?.table.get("tater.man").?.table.get("type").?.table.get("name").?.string);
+}
+
+test "tables 3" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 3.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
+
+test "tables 4" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 4.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
 }
