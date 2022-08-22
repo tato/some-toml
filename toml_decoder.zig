@@ -1022,3 +1022,22 @@ test "tables 4" {
     const err = decode(std.testing.allocator, stream.reader());
     try std.testing.expectError(error.duplicate_key, err);
 }
+
+test "tables 5" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 5.toml"));
+
+    var toml = try decode(std.testing.allocator, stream.reader());
+    defer toml.deinit();
+
+    try std.testing.expect(toml.get("a").?.table.get("b").?.table.get("c").? == .table);
+    try std.testing.expect(toml.get("d").?.table.get("e").?.table.get("f").? == .table);
+    try std.testing.expect(toml.get("g").?.table.get("h").?.table.get("i").? == .table);
+    try std.testing.expect(toml.get("j").?.table.get("ʞ").?.table.get("l").? == .table);
+}
+
+test "tables 6" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 6.toml"));
+    const err = decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
