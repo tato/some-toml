@@ -33,7 +33,7 @@ pub const DecodeError = std.mem.Allocator.Error || error{
 
 fn Parser(comptime Reader: type) type {
     return struct {
-        const lookahead = 2;
+        const ParserImpl = @This();
         const Stream = std.io.PeekStream(.{ .Static = 2 }, Reader);
 
         allocator: std.mem.Allocator,
@@ -44,70 +44,66 @@ fn Parser(comptime Reader: type) type {
         output: common.Toml,
         current_table: *common.Value.Table,
 
-        fn init(allocator: std.mem.Allocator, reader: Reader) !@This() {
-            const output = common.Toml{ .allocator = allocator };
-            const peekable = Stream.init(reader);
-            var parser = @This(){ .allocator = allocator, .stream = peekable, .output = output, .current_table = undefined };
-            return parser;
+        fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
+            return ParserImpl{
+                .allocator = allocator,
+                .stream = Stream.init(reader),
+                .output = common.Toml{ .allocator = allocator },
+                .current_table = undefined,
+            };
         }
 
-        fn deinit(parser: *@This()) void {
+        fn deinit(parser: *ParserImpl) void {
             parser.strings.deinit(parser.allocator);
             parser.* = undefined;
         }
 
-        fn parse(parser: *@This()) !common.Toml {
+        fn parse(parser: *ParserImpl) !common.Toml {
             parser.current_table = &parser.output.root;
             errdefer parser.output.deinit();
 
             while (true) {
                 try parser.skipWhitespace();
 
-                const maybe_open_bracket = try parser.readByte();
-                if (maybe_open_bracket) |open_bracket| {
-                    if (open_bracket == '[') {
-                        try parser.skipWhitespace();
+                if (try parser.match('[')) {
+                    try parser.skipWhitespace();
 
-                        const key_segments = (try parser.parseKey()) orelse return error.expected_key;
-                        defer parser.allocator.free(key_segments);
+                    const key_segments = (try parser.parseKey()) orelse return error.expected_key;
+                    defer parser.allocator.free(key_segments);
 
-                        try parser.skipWhitespace();
+                    try parser.skipWhitespace();
 
-                        const right_bracket = (try parser.readByte()) orelse return error.unexpected_eof;
-                        if (right_bracket != ']') return error.expected_right_bracket;
+                    try parser.consume(']', "Expected right bracket after table key.", error.expected_right_bracket);
 
-                        try parser.skipWhitespace();
+                    try parser.skipWhitespace();
 
-                        var current_table = &parser.output.root;
-                        for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
-                            const key = try parser.output.getString(parser.getString(key_bounds));
-                            const gop = try current_table.getOrPut(parser.output.allocator, key);
-                            if (gop.found_existing) {
-                                if (gop.value_ptr.* == .table) {
-                                    current_table = &gop.value_ptr.*.table;
-                                } else {
-                                    return error.duplicate_key;
-                                }
-                            } else {
-                                gop.value_ptr.* = .{ .table = .{} };
-                                current_table = &gop.value_ptr.*.table;
-                            }
-                        }
-
-                        const key_bounds = key_segments[key_segments.len - 1];
+                    var current_table = &parser.output.root;
+                    for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
                         const key = try parser.output.getString(parser.getString(key_bounds));
                         const gop = try current_table.getOrPut(parser.output.allocator, key);
                         if (gop.found_existing) {
-                            return error.duplicate_key;
+                            if (gop.value_ptr.* == .table) {
+                                current_table = &gop.value_ptr.*.table;
+                            } else {
+                                return error.duplicate_key;
+                            }
                         } else {
                             gop.value_ptr.* = .{ .table = .{} };
                             current_table = &gop.value_ptr.*.table;
                         }
-
-                        parser.current_table = current_table;
-                    } else {
-                        try parser.stream.putBackByte(open_bracket);
                     }
+
+                    const key_bounds = key_segments[key_segments.len - 1];
+                    const key = try parser.output.getString(parser.getString(key_bounds));
+                    const gop = try current_table.getOrPut(parser.output.allocator, key);
+                    if (gop.found_existing) {
+                        return error.duplicate_key;
+                    } else {
+                        gop.value_ptr.* = .{ .table = .{} };
+                        current_table = &gop.value_ptr.*.table;
+                    }
+
+                    parser.current_table = current_table;
                 }
 
                 try parser.matchKeyValuePair();
@@ -122,47 +118,101 @@ fn Parser(comptime Reader: type) type {
             return parser.output;
         }
 
-        fn matchKeyValuePair(parser: *@This()) !void {
+        fn readByte(parser: *ParserImpl) !?u8 {
+            return parser.stream.reader().readByte() catch |e| switch (e) {
+                error.EndOfStream => return null,
+                else => return error.io_error,
+            };
+        }
+
+        fn checkFn(parser: *ParserImpl, callback: fn (u8) bool) !bool {
+            if (try parser.readByte()) |byte| {
+                try parser.stream.putBackByte(byte);
+                return callback(byte);
+            }
+            return false;
+        }
+
+        fn match(parser: *ParserImpl, char: u8) !bool {
+            if (try parser.readByte()) |byte| {
+                if (char == byte)
+                    return true;
+
+                try parser.stream.putBackByte(byte);
+            }
+
+            return false;
+        }
+
+        fn matchFn(parser: *ParserImpl, callback: fn (u8) bool) !bool {
+            if (try parser.readByte()) |byte| {
+                if (callback(byte))
+                    return true;
+
+                try parser.stream.putBackByte(byte);
+            }
+
+            return false;
+        }
+
+        fn consume(parser: *ParserImpl, char: u8, message: []const u8, err: DecodeError) !void {
+            if (try parser.readByte()) |byte| if (char == byte) return;
+
+            std.debug.print("{s}\n", .{message});
+            return err;
+        }
+
+        fn matchNewLine(parser: *ParserImpl) !bool {
+            if (try parser.match('\n')) {
+                return true;
+            } else if (try parser.match('\r')) {
+                try parser.consume('\n', "Carriage return without matching line feed.", error.invalid_newline);
+                return true;
+            }
+            return false;
+        }
+
+        fn ensureNotEof(parser: *ParserImpl) !void {
+            if (try parser.readByte()) |byte| {
+                try parser.stream.putBackByte(byte);
+            } else {
+                return error.unexpected_eof;
+            }
+        }
+
+        fn matchKeyValuePair(parser: *ParserImpl) !void {
             const maybe_key_segments = try parser.parseKey();
             const key_segments = maybe_key_segments orelse return;
             defer parser.allocator.free(key_segments);
 
+            try parser.consume('=', "Expected equals after key.", error.expected_equals);
+            try parser.skipWhitespace();
+
             var value: common.Value = undefined;
-
             {
-                const c = (try parser.readByte()) orelse return error.unexpected_eof;
-                if (c != '=') return error.expected_equals;
-                try parser.skipWhitespace();
-            }
+                try parser.ensureNotEof();
 
-            {
-                const c = (try parser.readByte()) orelse return error.unexpected_eof;
-
-                if (c == '"') {
-                    const bounds = try parser.tokenizeBasicString(.allow_multi);
+                if (try parser.match('"')) {
+                    const bounds = try parser.tokenizeString(.basic, .allow_multi);
                     value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
-                } else if (c == '\'') {
-                    const bounds = try parser.tokenizeLiteralString(.allow_multi);
+                } else if (try parser.match('\'')) {
+                    const bounds = try parser.tokenizeString(.literal, .allow_multi);
                     value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
                 } else else_prong: {
-                    if (std.ascii.isDigit(c)) {
-                        try parser.stream.putBackByte(c);
-                        value = try parser.tokenizeNumber();
+                    if (try parser.checkFn(std.ascii.isDigit)) {
+                        value = try parser.tokenizeNumber(.positive);
                         break :else_prong;
                     }
 
-                    if (c == '-' or c == '+') {
-                        const d = try parser.readByte();
-                        if (d != null and std.ascii.isDigit(d.?)) {
-                            try parser.stream.putBackByte(d.?);
-                            try parser.stream.putBackByte(c);
-                            value = try parser.tokenizeNumber();
-                            break :else_prong;
-                        }
-                        if (d) |b| try parser.stream.putBackByte(b);
+                    if (try parser.match('-')) {
+                        value = try parser.tokenizeNumber(.negative);
+                        break :else_prong;
                     }
 
-                    try parser.stream.putBackByte(c);
+                    if (try parser.match('+')) {
+                        value = try parser.tokenizeNumber(.positive);
+                        break :else_prong;
+                    }
 
                     const bounds = try (parser.tokenizeBareKey() catch |e| switch (e) {
                         error.zero_length_bare_key => error.expected_value,
@@ -208,34 +258,29 @@ fn Parser(comptime Reader: type) type {
             try parser.skipWhitespace();
         }
 
-        fn parseKey(parser: *@This()) !?[]const StringBounds {
+        fn parseKey(parser: *ParserImpl) !?[]const StringBounds {
             var segments = std.ArrayList(StringBounds).init(parser.allocator);
             errdefer segments.deinit();
 
             while (true) {
-                const c = (try parser.readByte()) orelse return null;
-
-                if (c == '"') {
-                    const bounds = try parser.tokenizeBasicString(.disallow_multi);
+                if (try parser.match('"')) {
+                    const bounds = try parser.tokenizeString(.basic, .disallow_multi);
                     try segments.append(bounds);
-                } else if (c == '\'') {
-                    const bounds = try parser.tokenizeLiteralString(.disallow_multi);
+                } else if (try parser.match('\'')) {
+                    const bounds = try parser.tokenizeString(.literal, .disallow_multi);
                     try segments.append(bounds);
-                } else if (isBareKeyChar(c)) {
-                    try parser.stream.putBackByte(c);
+                } else if (try parser.checkFn(isBareKeyChar)) {
                     const bounds = try parser.tokenizeBareKey();
                     try segments.append(bounds);
                 } else {
-                    try parser.stream.putBackByte(c);
                     return null;
                 }
 
                 try parser.skipWhitespace();
-                const dot_char = (try parser.readByte()) orelse return error.unexpected_eof;
-                if (dot_char == '.') {
+
+                if (try parser.match('.')) {
                     try parser.skipWhitespace();
                 } else {
-                    try parser.stream.putBackByte(dot_char);
                     break;
                 }
             }
@@ -243,47 +288,12 @@ fn Parser(comptime Reader: type) type {
             return segments.toOwnedSlice();
         }
 
-        fn matchNewLine(parser: *@This()) !bool {
-            const nl = (try parser.readByte()) orelse return false;
-            if (nl == '\n') return true;
-            if (nl == '\r') {
-                const maybe_nlnl = try parser.readByte();
-                if (maybe_nlnl) |nlnl| {
-                    return if (nlnl == '\n') true else error.invalid_newline;
-                } else return error.unexpected_eof;
-            }
-            try parser.stream.putBackByte(nl);
-            return false;
-        }
-
-        fn readByte(parser: *@This()) !?u8 {
-            return parser.stream.reader().readByte() catch |e| switch (e) {
-                error.EndOfStream => return null,
-                else => return error.io_error,
-            };
-        }
-
-        fn isBareKeyChar(c: u8) bool {
-            return std.ascii.isAlNum(c) or c == '_' or c == '-';
-        }
-
-        fn tokenizeBareKey(parser: *@This()) !StringBounds {
+        fn tokenizeBareKey(parser: *ParserImpl) !StringBounds {
             const start = parser.strings.items.len;
 
-            while (true) {
+            while (try parser.checkFn(isBareKeyChar)) {
                 const c = try parser.readByte();
-                if (c) |b| {
-                    if (isBareKeyChar(b)) {
-                        try parser.strings.append(parser.allocator, b);
-                    } else {
-                        // we put back the unexpected byte: it's part of the next token
-                        try parser.stream.putBackByte(b);
-                        break;
-                    }
-                } else {
-                    // if readByte returns null we have reached eof
-                    break;
-                }
+                try parser.strings.append(parser.allocator, c.?);
             }
 
             const len = parser.strings.items.len - start;
@@ -292,60 +302,52 @@ fn Parser(comptime Reader: type) type {
         }
 
         const AllowMulti = enum(u1) { disallow_multi, allow_multi };
+        const StringKind = enum(u1) { basic, literal };
 
-        fn tokenizeBasicString(parser: *@This(), allow_multi: AllowMulti) !StringBounds {
+        fn tokenizeString(
+            parser: *ParserImpl,
+            kind: StringKind,
+            allow_multi: AllowMulti,
+        ) !StringBounds {
             const start = parser.strings.items.len;
 
-            const is_multi = check_multi: {
-                const c = (try parser.readByte()) orelse return error.unexpected_eof;
-                if (c == '"') check_multi_inner: {
-                    const cc = (try parser.readByte()) orelse break :check_multi_inner;
-                    if (cc == '"') break :check_multi true;
-                    try parser.stream.putBackByte(cc);
-                }
-                try parser.stream.putBackByte(c);
-                break :check_multi false;
+            const delimiter: u8 = switch (kind) {
+                .basic => '"',
+                .literal => '\'',
             };
+            const is_multi = try parser.matchMulti(delimiter);
 
-            if (is_multi and allow_multi == .disallow_multi) return error.unexpected_multi_line_string;
+            if (is_multi and allow_multi == .disallow_multi)
+                return error.unexpected_multi_line_string;
 
-            if (is_multi) trim_newline: {
-                const trim_a = (try parser.readByte()) orelse break :trim_newline;
-                if (trim_a == '\n') break :trim_newline;
-                if (trim_a == '\r') trim_newline_inner: {
-                    const trim_b = (try parser.readByte()) orelse break :trim_newline_inner;
-                    if (trim_b == '\n') break :trim_newline;
-                    try parser.stream.putBackByte(trim_b);
-                }
-                try parser.stream.putBackByte(trim_a);
+            if (is_multi) {
+                // skip new line immediately after """ or '''
+                _ = try parser.matchNewLine();
             }
 
             while (true) {
-                var c = (try parser.readByte()) orelse return error.unexpected_eof;
+                try parser.ensureNotEof();
 
                 if (is_multi) {
-                    if (c == '"') check_end: {
-                        const next = (try parser.readByte()) orelse break :check_end;
-                        if (next == '"') inner_check_end: {
-                            const nextnext = (try parser.readByte()) orelse break :inner_check_end;
-                            if (nextnext == '"') break;
-                            try parser.stream.putBackByte(nextnext);
-                        }
-                        try parser.stream.putBackByte(next);
+                    if (try parser.match(delimiter)) {
+                        if (try parser.matchMulti(delimiter))
+                            break;
+                        try parser.strings.append(parser.allocator, delimiter);
+                        continue;
                     }
                 } else {
-                    if (c == '"') break;
+                    if (try parser.match(delimiter)) break;
                 }
 
-                if (is_multi) {
-                    if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
-                } else {
-                    if (c == '\n') return error.invalid_newline_in_basic_string;
-                    if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
-                }
+                if (is_multi and try parser.matchFn(isDisallowedInMultiStrings))
+                    return error.invalid_control_in_basic_string;
+                if (!is_multi and try parser.match('\n'))
+                    return error.invalid_newline_in_basic_string;
+                if (!is_multi and try parser.matchFn(isDisallowedInSingleStrings))
+                    return error.invalid_control_in_basic_string;
 
-                if (c == '\\') {
-                    c = (try parser.readByte()) orelse return error.unexpected_eof;
+                if (kind == .basic and try parser.match('\\')) {
+                    var c = (try parser.readByte()) orelse return error.unexpected_eof;
                     switch (c) {
                         '"', '\\' => try parser.strings.append(parser.allocator, c),
                         'b' => try parser.strings.append(parser.allocator, std.ascii.control_code.BS),
@@ -395,73 +397,31 @@ fn Parser(comptime Reader: type) type {
                         else => return error.invalid_escape_sequence,
                     }
                 } else {
-                    try parser.strings.append(parser.allocator, c);
+                    const byte = try parser.readByte();
+                    try parser.strings.append(parser.allocator, byte.?);
                 }
             }
 
             return StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
-        fn tokenizeLiteralString(parser: *@This(), allow_multi: AllowMulti) !StringBounds {
-            const start = parser.strings.items.len;
+        fn matchMulti(parser: *ParserImpl, delimiter: u8) !bool {
+            if (try parser.readByte()) |c| {
+                if (c == delimiter) {
+                    if (try parser.readByte()) |c2| {
+                        if (c2 == delimiter)
+                            return true;
 
-            const is_multi = check_multi: {
-                const c = (try parser.readByte()) orelse return error.unexpected_eof;
-                if (c == '\'') check_multi_inner: {
-                    const cc = (try parser.readByte()) orelse break :check_multi_inner;
-                    if (cc == '\'') break :check_multi true;
-                    try parser.stream.putBackByte(cc);
+                        try parser.stream.putBackByte(c2);
+                    }
                 }
                 try parser.stream.putBackByte(c);
-                break :check_multi false;
-            };
-
-            if (is_multi and allow_multi == .disallow_multi) return error.unexpected_multi_line_string;
-
-            if (is_multi) {
-                trim_newline: {
-                    const trim_a = (try parser.readByte()) orelse break :trim_newline;
-                    if (trim_a == '\n') break :trim_newline;
-                    if (trim_a == '\r') inner_trim_newline: {
-                        const trim_b = (try parser.readByte()) orelse break :inner_trim_newline;
-                        if (trim_b == '\n') break :trim_newline;
-                        try parser.stream.putBackByte(trim_b);
-                    }
-                    try parser.stream.putBackByte(trim_a);
-                }
             }
 
-            while (true) {
-                var c = (try parser.readByte()) orelse return error.unexpected_eof;
-
-                if (is_multi) {
-                    if (std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r') return error.invalid_control_in_basic_string;
-                } else {
-                    if (c == '\n') return error.invalid_newline_in_basic_string;
-                    if (std.ascii.isCntrl(c) and c != '\t') return error.invalid_control_in_basic_string;
-                }
-
-                if (is_multi) {
-                    if (c == '\'') check_end: {
-                        const next = (try parser.readByte()) orelse break :check_end;
-                        if (next == '\'') inner_check_end: {
-                            const nextnext = (try parser.readByte()) orelse break :inner_check_end;
-                            if (nextnext == '\'') break;
-                            try parser.stream.putBackByte(nextnext);
-                        }
-                        try parser.stream.putBackByte(next);
-                    }
-                } else {
-                    if (c == '\'') break;
-                }
-
-                try parser.strings.append(parser.allocator, c);
-            }
-
-            return StringBounds{ .start = start, .len = parser.strings.items.len - start };
+            return false;
         }
 
-        fn tokenizeUnicodeSequence(parser: *@This(), comptime len: u8) !void {
+        fn tokenizeUnicodeSequence(parser: *ParserImpl, comptime len: u8) !void {
             var digits: [len]u8 = undefined;
             for (digits) |*d| {
                 const c = (try parser.readByte()) orelse return error.unexpected_eof;
@@ -484,13 +444,9 @@ fn Parser(comptime Reader: type) type {
             try parser.strings.appendSlice(parser.allocator, utf8_buf[0..utf8_len]);
         }
 
-        fn tokenizeNumber(parser: *@This()) !common.Value {
-            const sign_char = (try parser.readByte()) orelse return error.unexpected_eof;
-            const negative = if (sign_char == '-') true else if (sign_char == '+') false else else_prong: {
-                try parser.stream.putBackByte(sign_char);
-                break :else_prong false;
-            };
+        const Sign = enum { positive, negative };
 
+        fn tokenizeNumber(parser: *ParserImpl, sign: Sign) !common.Value {
             const base: i64 = base: {
                 const base_zero = (try parser.readByte()) orelse return error.unexpected_eof;
                 if (base_zero == '0') {
@@ -545,38 +501,16 @@ fn Parser(comptime Reader: type) type {
                 number += value_fn(n) * scale;
             }
 
-            if (negative) {
+            if (sign == .negative) {
                 number = -number;
             }
 
             return common.Value{ .integer = number };
         }
 
-        fn hexValue(c: u8) u8 {
-            return if (std.ascii.isDigit(c)) c - '0' else std.ascii.toLower(c) - 'a' + 10;
-        }
-
-        fn digitValue(c: u8) u8 {
-            return c - '0';
-        }
-
-        fn isHexDigit(c: u8) bool {
-            const lower_c = std.ascii.toLower(c);
-            return std.ascii.isDigit(c) or (lower_c >= 'a' and lower_c <= 'f');
-        }
-
-        fn isOctalDigit(c: u8) bool {
-            return c >= '0' and c <= '7';
-        }
-
-        fn isBinDigit(c: u8) bool {
-            return c == '0' or c == '1';
-        }
-
-        fn skipComment(parser: *@This()) !void {
+        fn skipComment(parser: *ParserImpl) !void {
             while (true) {
-                const found_newline = try parser.matchNewLine();
-                if (found_newline) {
+                if (try parser.matchNewLine()) {
                     try parser.stream.putBackByte('\n');
                     break;
                 } else {
@@ -586,20 +520,55 @@ fn Parser(comptime Reader: type) type {
             }
         }
 
-        fn skipWhitespace(parser: *@This()) !void {
-            var c = (try parser.readByte()) orelse return;
-            while (c == ' ' or c == '\t') : (c = (try parser.readByte()) orelse return) {}
-            if (c == '#') try parser.skipComment() else try parser.stream.putBackByte(c);
+        fn skipWhitespace(parser: *ParserImpl) !void {
+            while (try parser.matchFn(isWhitespace)) {}
+            if (try parser.match('#')) try parser.skipComment();
         }
 
-        fn getString(parser: *@This(), bounds: StringBounds) []const u8 {
+        fn getString(parser: *ParserImpl, bounds: StringBounds) []const u8 {
             std.debug.assert(parser.strings.items.len >= bounds.start + bounds.len);
             return parser.strings.items[bounds.start .. bounds.start + bounds.len];
         }
-
-        const StringBounds = struct {
-            start: usize,
-            len: usize,
-        };
     };
+}
+
+const StringBounds = struct {
+    start: usize,
+    len: usize,
+};
+
+fn isBareKeyChar(c: u8) bool {
+    return std.ascii.isAlNum(c) or c == '_' or c == '-';
+}
+fn hexValue(c: u8) u8 {
+    return if (std.ascii.isDigit(c)) c - '0' else std.ascii.toLower(c) - 'a' + 10;
+}
+
+fn digitValue(c: u8) u8 {
+    return c - '0';
+}
+
+fn isWhitespace(c: u8) bool {
+    return c == ' ' or c == '\t';
+}
+
+fn isHexDigit(c: u8) bool {
+    const lower_c = std.ascii.toLower(c);
+    return std.ascii.isDigit(c) or (lower_c >= 'a' and lower_c <= 'f');
+}
+
+fn isOctalDigit(c: u8) bool {
+    return c >= '0' and c <= '7';
+}
+
+fn isBinDigit(c: u8) bool {
+    return c == '0' or c == '1';
+}
+
+fn isDisallowedInMultiStrings(c: u8) bool {
+    return std.ascii.isCntrl(c) and c != '\t' and c != '\n' and c != '\r';
+}
+
+fn isDisallowedInSingleStrings(c: u8) bool {
+    return std.ascii.isCntrl(c) and c != '\t';
 }
