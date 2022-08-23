@@ -127,7 +127,7 @@ fn Parser(comptime Reader: type) type {
             };
         }
 
-        fn checkFn(parser: *ParserImpl, callback: fn (u8) bool) !bool {
+        fn checkFn(parser: *ParserImpl, comptime callback: fn (u8) bool) !bool {
             if (try parser.readByte()) |byte| {
                 try parser.stream.putBackByte(byte);
                 return callback(byte);
@@ -146,7 +146,7 @@ fn Parser(comptime Reader: type) type {
             return false;
         }
 
-        fn matchFn(parser: *ParserImpl, callback: fn (u8) bool) !bool {
+        fn matchFn(parser: *ParserImpl, comptime callback: fn (u8) bool) !bool {
             if (try parser.readByte()) |byte| {
                 if (callback(byte))
                     return true;
