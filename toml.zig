@@ -423,6 +423,11 @@ test "tables 3" {
     try std.testing.expectError(error.duplicate_key, err);
 }
 
+// TODO
+// Since tables cannot be defined more than once, redefining such tables using a [table] header is not allowed.
+// Likewise, using dotted keys to redefine tables already defined in [table] form is not allowed. The [table] form
+// can, however, be used to define sub-tables within tables defined via dotted keys.
+
 test "tables 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 4.toml"));
     const err = lib.decode(std.testing.allocator, stream.reader());
@@ -442,7 +447,6 @@ test "tables 5" {
 }
 
 test "tables 6" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 6.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
@@ -453,51 +457,56 @@ test "tables 6" {
 }
 
 test "tables 7" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 7.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expect(false);
+    try std.testing.expect(toml.get("fruit").?.table.get("apple").? == .table);
+    try std.testing.expect(toml.get("animal").? == .table);
+    try std.testing.expect(toml.get("fruit").?.table.get("orange").? == .table);
 }
 
 test "tables 8" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 8.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expect(false);
+    try std.testing.expect(toml.get("fruit").?.table.get("apple").? == .table);
+    try std.testing.expect(toml.get("fruit").?.table.get("orange").? == .table);
+    try std.testing.expect(toml.get("animal").? == .table);
 }
 
 test "tables 9" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 9.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expect(false);
+    try std.testing.expectEqualSlices(u8, "Fido", toml.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "pug", toml.get("breed").?.string);
+    try std.testing.expectEqualSlices(u8, "Regina Dogman", toml.get("owner").?.table.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "1999-08-04", toml.get("owner").?.table.get("member_since").?.string);
 }
 
 test "tables 10" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 10.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expect(false);
+    try std.testing.expectEqualSlices(u8, "red", toml.get("fruit").?.table.get("apple").?.table.get("color").?.string);
+    try std.testing.expectEqual(true, toml.get("fruit").?.table.get("apple").?.table.get("taste").?.table.get("sweet").?.boolean);
 }
 
 test "tables 11" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 11.toml"));
 
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expect(false);
+    try std.testing.expectEqualSlices(u8, "red", toml.get("fruit").?.table.get("apple").?.table.get("color").?.string);
+    try std.testing.expectEqual(true, toml.get("fruit").?.table.get("apple").?.table.get("taste").?.table.get("sweet").?.boolean);
+    try std.testing.expectEqual(true, toml.get("fruit").?.table.get("apple").?.table.get("texture").?.table.get("smooth").?.boolean);
 }
