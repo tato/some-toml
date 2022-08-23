@@ -264,10 +264,10 @@ fn Parser(comptime Reader: type) type {
 
             while (true) {
                 if (try parser.match('"')) {
-                    const bounds = try parser.tokenizeString(.basic, .disallow_multi);
+                    const bounds = try parser.tokenizeString(.basic, .forbid_multi);
                     try segments.append(bounds);
                 } else if (try parser.match('\'')) {
-                    const bounds = try parser.tokenizeString(.literal, .disallow_multi);
+                    const bounds = try parser.tokenizeString(.literal, .forbid_multi);
                     try segments.append(bounds);
                 } else if (try parser.checkFn(isBareKeyChar)) {
                     const bounds = try parser.tokenizeBareKey();
@@ -301,8 +301,8 @@ fn Parser(comptime Reader: type) type {
             return StringBounds{ .start = start, .len = len };
         }
 
-        const AllowMulti = enum(u1) { disallow_multi, allow_multi };
-        const StringKind = enum(u1) { basic, literal };
+        const AllowMulti = enum { forbid_multi, allow_multi };
+        const StringKind = enum { basic, literal };
 
         fn tokenizeString(
             parser: *ParserImpl,
@@ -317,7 +317,7 @@ fn Parser(comptime Reader: type) type {
             };
             const is_multi = try parser.matchMulti(delimiter);
 
-            if (is_multi and allow_multi == .disallow_multi)
+            if (is_multi and allow_multi == .forbid_multi)
                 return error.unexpected_multi_line_string;
 
             if (is_multi) {
@@ -362,34 +362,27 @@ fn Parser(comptime Reader: type) type {
 
                             var found_the_newline = c == '\n';
                             if (c == '\r') {
-                                c = (try parser.readByte()) orelse return error.unexpected_eof;
-                                if (c == '\n') {
-                                    found_the_newline = true;
-                                } else {
-                                    return error.unexpected_character;
-                                }
+                                try parser.consume('\n', "Carriage return without matching line feed.", error.invalid_newline);
+                                found_the_newline = true;
                             }
+
                             while (true) {
                                 c = (try parser.readByte()) orelse return error.unexpected_eof;
                                 switch (c) {
                                     ' ', '\t' => {},
                                     '\n' => found_the_newline = true,
                                     '\r' => {
-                                        c = (try parser.readByte()) orelse return error.unexpected_eof;
-                                        if (c == '\n') {
-                                            found_the_newline = true;
-                                        } else {
-                                            return error.unexpected_character;
-                                        }
+                                        try parser.consume('\n', "Carriage return without matching line feed.", error.invalid_newline);
+                                        found_the_newline = true;
                                     },
                                     else => {
-                                        if (found_the_newline) {
-                                            try parser.stream.putBackByte(c);
-                                            break;
-                                        } else {
+                                        if (!found_the_newline) {
                                             std.log.err("Found '{c}' before finding the newline while parsing line ending backslash.", .{c});
                                             return error.invalid_escape_sequence;
                                         }
+
+                                        try parser.stream.putBackByte(c);
+                                        break;
                                     },
                                 }
                             }
