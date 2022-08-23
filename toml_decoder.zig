@@ -64,9 +64,9 @@ fn Parser(comptime Reader: type) type {
             parser.current_table = &parser.output.root;
             errdefer parser.output.deinit();
 
-            while (true) {
+            while (!(try parser.isAtEof())) {
                 try parser.skipWhitespace();
-                if (try parser.match('\n')) continue;
+                if (try parser.matchNewLine()) continue;
 
                 if (try parser.match('[')) {
                     const sfa = parser.stack_fallback.get();
@@ -104,17 +104,11 @@ fn Parser(comptime Reader: type) type {
                     try parser.consume(']', "Expected right bracket after table key.", error.expected_right_bracket);
 
                     try parser.skipWhitespace();
-                    _ = try parser.matchNewLine();
-                    continue;
+                    try parser.consumeNewLineOrEof();
+                } else {
+                    try parser.matchKeyValuePair();
+                    try parser.consumeNewLineOrEof();
                 }
-
-                try parser.matchKeyValuePair();
-                const found_newline = try parser.matchNewLine();
-
-                const c = try parser.readByte();
-                if (c) |b| {
-                    if (!found_newline) return error.expected_newline else try parser.stream.putBackByte(b);
-                } else break;
             }
 
             return parser.output;
@@ -125,6 +119,14 @@ fn Parser(comptime Reader: type) type {
                 error.EndOfStream => return null,
                 else => return error.io_error,
             };
+        }
+
+        fn isAtEof(parser: *ParserImpl) !bool {
+            if (try parser.readByte()) |byte| {
+                try parser.stream.putBackByte(byte);
+                return false;
+            }
+            return true;
         }
 
         fn checkFn(parser: *ParserImpl, comptime callback: fn (u8) bool) !bool {
@@ -174,6 +176,20 @@ fn Parser(comptime Reader: type) type {
             return false;
         }
 
+        fn consumeNewLineOrEof(parser: *ParserImpl) !void {
+            if (try parser.isAtEof()) {
+                return;
+            } else if (try parser.match('\n')) {
+                return;
+            } else if (try parser.match('\r')) {
+                try parser.consume('\n', "Carriage return without matching line feed.", error.invalid_newline);
+                return;
+            }
+
+            std.debug.print("Expected new line.\n", .{});
+            return error.expected_newline;
+        }
+
         fn ensureNotEof(parser: *ParserImpl) !void {
             if (try parser.readByte()) |byte| {
                 try parser.stream.putBackByte(byte);
@@ -183,11 +199,7 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn matchKeyValuePair(parser: *ParserImpl) !void {
-            // If EOF, return
-            const byte = try parser.readByte();
-            if (byte) |b| {
-                try parser.stream.putBackByte(b);
-            } else return;
+            if (try parser.isAtEof()) return;
 
             const sfa = parser.stack_fallback.get();
 
