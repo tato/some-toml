@@ -35,11 +35,13 @@ fn Parser(comptime Reader: type) type {
     return struct {
         const ParserImpl = @This();
         const Stream = std.io.PeekStream(.{ .Static = 2 }, Reader);
+        const stack_fallback_size = 1 << 10;
+        const StackFallback = std.heap.StackFallbackAllocator(stack_fallback_size);
 
         allocator: std.mem.Allocator,
+        stack_fallback: StackFallback,
 
         stream: Stream,
-        strings: std.ArrayListUnmanaged(u8) = .{},
 
         output: common.Toml,
         current_table: *common.Value.Table,
@@ -47,6 +49,7 @@ fn Parser(comptime Reader: type) type {
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
             return ParserImpl{
                 .allocator = allocator,
+                .stack_fallback = std.heap.stackFallback(stack_fallback_size, allocator),
                 .stream = Stream.init(reader),
                 .output = common.Toml{ .allocator = allocator },
                 .current_table = undefined,
@@ -54,7 +57,6 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn deinit(parser: *ParserImpl) void {
-            parser.strings.deinit(parser.allocator);
             parser.* = undefined;
         }
 
@@ -64,48 +66,46 @@ fn Parser(comptime Reader: type) type {
 
             while (true) {
                 try parser.skipWhitespace();
+                if (try parser.match('\n')) continue;
 
                 if (try parser.match('[')) {
+                    const sfa = parser.stack_fallback.get();
+
                     try parser.skipWhitespace();
 
-                    const key_segments = (try parser.parseKey()) orelse return error.expected_key;
-                    defer parser.allocator.free(key_segments);
+                    var current_table = &parser.output.root;
+
+                    while (true) {
+                        var out = std.ArrayList(u8).init(sfa);
+                        defer out.deinit();
+
+                        try parser.parseKeySegment(&out);
+                        const has_more_segments = try parser.match('.');
+                        if (has_more_segments) try parser.skipWhitespace();
+
+                        const gop = try current_table.getOrPut(parser.output.allocator, out.items);
+                        if (!gop.found_existing) {
+                            gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
+                            gop.value_ptr.* = .{ .table = .{} };
+                            current_table = &gop.value_ptr.*.table;
+                        } else if (gop.value_ptr.* == .table) {
+                            current_table = &gop.value_ptr.*.table;
+                        } else {
+                            return error.duplicate_key;
+                        }
+
+                        if (!has_more_segments) break;
+                    }
+
+                    parser.current_table = current_table;
 
                     try parser.skipWhitespace();
 
                     try parser.consume(']', "Expected right bracket after table key.", error.expected_right_bracket);
 
                     try parser.skipWhitespace();
-
-                    var current_table = &parser.output.root;
-                    for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
-                        const key = parser.getString(key_bounds);
-                        const gop = try current_table.getOrPut(parser.output.allocator, key);
-                        if (gop.found_existing) {
-                            if (gop.value_ptr.* == .table) {
-                                current_table = &gop.value_ptr.*.table;
-                            } else {
-                                return error.duplicate_key;
-                            }
-                        } else {
-                            gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
-                            gop.value_ptr.* = .{ .table = .{} };
-                            current_table = &gop.value_ptr.*.table;
-                        }
-                    }
-
-                    const key_bounds = key_segments[key_segments.len - 1];
-                    const key = parser.getString(key_bounds);
-                    const gop = try current_table.getOrPut(parser.output.allocator, key);
-                    if (gop.found_existing) {
-                        return error.duplicate_key;
-                    } else {
-                        gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
-                        gop.value_ptr.* = .{ .table = .{} };
-                        current_table = &gop.value_ptr.*.table;
-                    }
-
-                    parser.current_table = current_table;
+                    _ = try parser.matchNewLine();
+                    continue;
                 }
 
                 try parser.matchKeyValuePair();
@@ -183,128 +183,114 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn matchKeyValuePair(parser: *ParserImpl) !void {
-            const maybe_key_segments = try parser.parseKey();
-            const key_segments = maybe_key_segments orelse return;
-            defer parser.allocator.free(key_segments);
+            // If EOF, return
+            const byte = try parser.readByte();
+            if (byte) |b| {
+                try parser.stream.putBackByte(b);
+            } else return;
+
+            const sfa = parser.stack_fallback.get();
+
+            var current_table = parser.current_table;
+
+            const value_ptr: *common.Value = while (true) {
+                var out = std.ArrayList(u8).init(sfa);
+                defer out.deinit();
+
+                try parser.parseKeySegment(&out);
+                const has_more_segments = try parser.match('.');
+                if (has_more_segments) try parser.skipWhitespace();
+
+                const gop = try current_table.getOrPut(parser.output.allocator, out.items);
+                if (!gop.found_existing) {
+                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
+                    if (has_more_segments) {
+                        gop.value_ptr.* = .{ .table = .{} };
+                        current_table = &gop.value_ptr.*.table;
+                    } else {
+                        break gop.value_ptr;
+                    }
+                } else if (has_more_segments and gop.value_ptr.* == .table) {
+                    current_table = &gop.value_ptr.*.table;
+                } else {
+                    return error.duplicate_key;
+                }
+            } else unreachable;
 
             try parser.consume('=', "Expected equals after key.", error.expected_equals);
             try parser.skipWhitespace();
 
-            var value: common.Value = undefined;
             {
                 try parser.ensureNotEof();
 
                 if (try parser.match('"')) {
-                    const bounds = try parser.tokenizeString(.basic, .allow_multi);
-                    value = .{ .string = parser.getString(bounds) };
+                    var out = std.ArrayList(u8).init(sfa);
+                    defer out.deinit();
+                    try parser.tokenizeString(.basic, .allow_multi, &out);
+                    value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
                 } else if (try parser.match('\'')) {
-                    const bounds = try parser.tokenizeString(.literal, .allow_multi);
-                    value = .{ .string = parser.getString(bounds) };
+                    var out = std.ArrayList(u8).init(sfa);
+                    defer out.deinit();
+                    try parser.tokenizeString(.literal, .allow_multi, &out);
+                    value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
                 } else else_prong: {
                     if (try parser.checkFn(std.ascii.isDigit)) {
-                        value = try parser.tokenizeNumber(.positive);
+                        value_ptr.* = try parser.tokenizeNumber(.positive);
                         break :else_prong;
                     }
 
                     if (try parser.match('-')) {
-                        value = try parser.tokenizeNumber(.negative);
+                        value_ptr.* = try parser.tokenizeNumber(.negative);
                         break :else_prong;
                     }
 
                     if (try parser.match('+')) {
-                        value = try parser.tokenizeNumber(.positive);
+                        value_ptr.* = try parser.tokenizeNumber(.positive);
                         break :else_prong;
                     }
 
-                    const bounds = try (parser.tokenizeBareKey() catch |e| switch (e) {
-                        error.zero_length_bare_key => error.expected_value,
-                        else => e,
-                    });
-                    const string = parser.getString(bounds);
-                    if (std.mem.eql(u8, "true", string)) {
-                        value = .{ .boolean = true };
-                    } else if (std.mem.eql(u8, "false", string)) {
-                        value = .{ .boolean = false };
+                    var string = std.ArrayList(u8).init(sfa);
+                    parser.tokenizeBareKey(&string) catch |e| switch (e) {
+                        error.zero_length_bare_key => return error.expected_value,
+                        else => return e,
+                    };
+                    if (std.mem.eql(u8, "true", string.items)) {
+                        value_ptr.* = .{ .boolean = true };
+                    } else if (std.mem.eql(u8, "false", string.items)) {
+                        value_ptr.* = .{ .boolean = false };
                     } else {
                         return error.unexpected_bare_key;
                     }
+                    string.deinit();
                 }
-            }
-
-            var current_table = parser.current_table;
-            for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
-                const key = parser.getString(key_bounds);
-                const gop = try current_table.getOrPut(parser.output.allocator, key);
-                if (gop.found_existing) {
-                    if (gop.value_ptr.* == .table) {
-                        current_table = &gop.value_ptr.*.table;
-                    } else {
-                        return error.duplicate_key;
-                    }
-                } else {
-                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
-                    gop.value_ptr.* = .{ .table = .{} };
-                    current_table = &gop.value_ptr.*.table;
-                }
-            }
-
-            const key_bounds = key_segments[key_segments.len - 1];
-            const key = parser.getString(key_bounds);
-            const gop = try current_table.getOrPut(parser.output.allocator, key);
-            if (gop.found_existing) {
-                return error.duplicate_key;
-            } else {
-                gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
-                if (value == .string) {
-                    value.string = try parser.output.allocator.dupe(u8, value.string);
-                }
-                gop.value_ptr.* = value;
             }
 
             try parser.skipWhitespace();
         }
 
-        fn parseKey(parser: *ParserImpl) !?[]const StringBounds {
-            var segments = std.ArrayList(StringBounds).init(parser.allocator);
-            errdefer segments.deinit();
-
-            while (true) {
-                if (try parser.match('"')) {
-                    const bounds = try parser.tokenizeString(.basic, .forbid_multi);
-                    try segments.append(bounds);
-                } else if (try parser.match('\'')) {
-                    const bounds = try parser.tokenizeString(.literal, .forbid_multi);
-                    try segments.append(bounds);
-                } else if (try parser.checkFn(isBareKeyChar)) {
-                    const bounds = try parser.tokenizeBareKey();
-                    try segments.append(bounds);
-                } else {
-                    return null;
-                }
-
-                try parser.skipWhitespace();
-
-                if (try parser.match('.')) {
-                    try parser.skipWhitespace();
-                } else {
-                    break;
-                }
+        fn parseKeySegment(parser: *ParserImpl, out: *std.ArrayList(u8)) !void {
+            if (try parser.match('"')) {
+                try parser.tokenizeString(.basic, .forbid_multi, out);
+            } else if (try parser.match('\'')) {
+                try parser.tokenizeString(.literal, .forbid_multi, out);
+            } else if (try parser.checkFn(isBareKeyChar)) {
+                try parser.tokenizeBareKey(out);
+            } else {
+                return error.expected_key;
             }
 
-            return segments.toOwnedSlice();
+            try parser.skipWhitespace();
         }
 
-        fn tokenizeBareKey(parser: *ParserImpl) !StringBounds {
-            const start = parser.strings.items.len;
+        fn tokenizeBareKey(parser: *ParserImpl, out: *std.ArrayList(u8)) !void {
+            errdefer out.deinit();
 
             while (try parser.checkFn(isBareKeyChar)) {
                 const c = try parser.readByte();
-                try parser.strings.append(parser.allocator, c.?);
+                try out.append(c.?);
             }
 
-            const len = parser.strings.items.len - start;
-            if (len == 0) return error.zero_length_bare_key;
-            return StringBounds{ .start = start, .len = len };
+            if (out.items.len == 0) return error.zero_length_bare_key;
         }
 
         const AllowMulti = enum { forbid_multi, allow_multi };
@@ -314,8 +300,9 @@ fn Parser(comptime Reader: type) type {
             parser: *ParserImpl,
             kind: StringKind,
             allow_multi: AllowMulti,
-        ) !StringBounds {
-            const start = parser.strings.items.len;
+            out: *std.ArrayList(u8),
+        ) !void {
+            errdefer out.deinit();
 
             const delimiter: u8 = switch (kind) {
                 .basic => '"',
@@ -338,7 +325,7 @@ fn Parser(comptime Reader: type) type {
                     if (try parser.match(delimiter)) {
                         if (try parser.matchMulti(delimiter))
                             break;
-                        try parser.strings.append(parser.allocator, delimiter);
+                        try out.append(delimiter);
                         continue;
                     }
                 } else {
@@ -355,14 +342,14 @@ fn Parser(comptime Reader: type) type {
                 if (kind == .basic and try parser.match('\\')) {
                     var c = (try parser.readByte()) orelse return error.unexpected_eof;
                     switch (c) {
-                        '"', '\\' => try parser.strings.append(parser.allocator, c),
-                        'b' => try parser.strings.append(parser.allocator, std.ascii.control_code.BS),
-                        't' => try parser.strings.append(parser.allocator, '\t'),
-                        'n' => try parser.strings.append(parser.allocator, '\n'),
-                        'f' => try parser.strings.append(parser.allocator, std.ascii.control_code.FF),
-                        'r' => try parser.strings.append(parser.allocator, '\r'),
-                        'u' => try parser.tokenizeUnicodeSequence(4),
-                        'U' => try parser.tokenizeUnicodeSequence(8),
+                        '"', '\\' => try out.append(c),
+                        'b' => try out.append(std.ascii.control_code.BS),
+                        't' => try out.append('\t'),
+                        'n' => try out.append('\n'),
+                        'f' => try out.append(std.ascii.control_code.FF),
+                        'r' => try out.append('\r'),
+                        'u' => try parser.tokenizeUnicodeSequence(4, out),
+                        'U' => try parser.tokenizeUnicodeSequence(8, out),
                         ' ', '\t', '\r', '\n' => {
                             if (!is_multi) return error.invalid_escape_sequence;
 
@@ -397,11 +384,9 @@ fn Parser(comptime Reader: type) type {
                     }
                 } else {
                     const byte = try parser.readByte();
-                    try parser.strings.append(parser.allocator, byte.?);
+                    try out.append(byte.?);
                 }
             }
-
-            return StringBounds{ .start = start, .len = parser.strings.items.len - start };
         }
 
         fn matchMulti(parser: *ParserImpl, delimiter: u8) !bool {
@@ -420,7 +405,7 @@ fn Parser(comptime Reader: type) type {
             return false;
         }
 
-        fn tokenizeUnicodeSequence(parser: *ParserImpl, comptime len: u8) !void {
+        fn tokenizeUnicodeSequence(parser: *ParserImpl, comptime len: u8, out: *std.ArrayList(u8)) !void {
             var digits: [len]u8 = undefined;
             for (digits) |*d| {
                 const c = (try parser.readByte()) orelse return error.unexpected_eof;
@@ -440,7 +425,7 @@ fn Parser(comptime Reader: type) type {
                 error.CodepointTooLarge,
                 => return error.invalid_unicode_scalar_in_escape_sequence,
             };
-            try parser.strings.appendSlice(parser.allocator, utf8_buf[0..utf8_len]);
+            try out.appendSlice(utf8_buf[0..utf8_len]);
         }
 
         const Sign = enum { positive, negative };
@@ -523,18 +508,8 @@ fn Parser(comptime Reader: type) type {
             while (try parser.matchFn(isWhitespace)) {}
             if (try parser.match('#')) try parser.skipComment();
         }
-
-        fn getString(parser: *ParserImpl, bounds: StringBounds) []const u8 {
-            std.debug.assert(parser.strings.items.len >= bounds.start + bounds.len);
-            return parser.strings.items[bounds.start .. bounds.start + bounds.len];
-        }
     };
 }
-
-const StringBounds = struct {
-    start: usize,
-    len: usize,
-};
 
 fn isBareKeyChar(c: u8) bool {
     return std.ascii.isAlNum(c) or c == '_' or c == '-';
