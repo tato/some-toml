@@ -79,7 +79,7 @@ fn Parser(comptime Reader: type) type {
 
                     var current_table = &parser.output.root;
                     for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
-                        const key = try parser.output.getString(parser.getString(key_bounds));
+                        const key = parser.getString(key_bounds);
                         const gop = try current_table.getOrPut(parser.output.allocator, key);
                         if (gop.found_existing) {
                             if (gop.value_ptr.* == .table) {
@@ -88,17 +88,19 @@ fn Parser(comptime Reader: type) type {
                                 return error.duplicate_key;
                             }
                         } else {
+                            gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
                             gop.value_ptr.* = .{ .table = .{} };
                             current_table = &gop.value_ptr.*.table;
                         }
                     }
 
                     const key_bounds = key_segments[key_segments.len - 1];
-                    const key = try parser.output.getString(parser.getString(key_bounds));
+                    const key = parser.getString(key_bounds);
                     const gop = try current_table.getOrPut(parser.output.allocator, key);
                     if (gop.found_existing) {
                         return error.duplicate_key;
                     } else {
+                        gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
                         gop.value_ptr.* = .{ .table = .{} };
                         current_table = &gop.value_ptr.*.table;
                     }
@@ -194,10 +196,10 @@ fn Parser(comptime Reader: type) type {
 
                 if (try parser.match('"')) {
                     const bounds = try parser.tokenizeString(.basic, .allow_multi);
-                    value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
+                    value = .{ .string = parser.getString(bounds) };
                 } else if (try parser.match('\'')) {
                     const bounds = try parser.tokenizeString(.literal, .allow_multi);
-                    value = .{ .string = try parser.output.getString(parser.getString(bounds)) };
+                    value = .{ .string = parser.getString(bounds) };
                 } else else_prong: {
                     if (try parser.checkFn(std.ascii.isDigit)) {
                         value = try parser.tokenizeNumber(.positive);
@@ -228,11 +230,10 @@ fn Parser(comptime Reader: type) type {
                     }
                 }
             }
-            errdefer value.deinit(parser.output.allocator);
 
             var current_table = parser.current_table;
             for (key_segments[0 .. key_segments.len - 1]) |key_bounds| {
-                const key = try parser.output.getString(parser.getString(key_bounds));
+                const key = parser.getString(key_bounds);
                 const gop = try current_table.getOrPut(parser.output.allocator, key);
                 if (gop.found_existing) {
                     if (gop.value_ptr.* == .table) {
@@ -241,17 +242,22 @@ fn Parser(comptime Reader: type) type {
                         return error.duplicate_key;
                     }
                 } else {
+                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
                     gop.value_ptr.* = .{ .table = .{} };
                     current_table = &gop.value_ptr.*.table;
                 }
             }
 
             const key_bounds = key_segments[key_segments.len - 1];
-            const key = try parser.output.getString(parser.getString(key_bounds));
+            const key = parser.getString(key_bounds);
             const gop = try current_table.getOrPut(parser.output.allocator, key);
             if (gop.found_existing) {
                 return error.duplicate_key;
             } else {
+                gop.key_ptr.* = try parser.output.allocator.dupe(u8, key);
+                if (value == .string) {
+                    value.string = try parser.output.allocator.dupe(u8, value.string);
+                }
                 gop.value_ptr.* = value;
             }
 
