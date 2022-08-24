@@ -29,6 +29,7 @@ pub const DecodeError = std.mem.Allocator.Error || error{
     unexpected_character,
     invalid_char_in_unicode_escape_sequence,
     invalid_unicode_scalar_in_escape_sequence,
+    overflow,
 };
 
 fn Parser(comptime Reader: type) type {
@@ -375,17 +376,28 @@ fn Parser(comptime Reader: type) type {
                 }
             } else else_prong: {
                 if (try parser.checkFn(std.ascii.isDigit)) {
-                    value_ptr.* = try parser.tokenizeNumber(.positive);
+                    var buf = std.ArrayList(u8).init(sfa);
+                    defer buf.deinit();
+
+                    value_ptr.* = try parser.tokenizeNumber(&buf);
                     break :else_prong;
                 }
 
                 if (try parser.match('-')) {
-                    value_ptr.* = try parser.tokenizeNumber(.negative);
+                    var buf = std.ArrayList(u8).init(sfa);
+                    defer buf.deinit();
+                    try buf.append('-');
+
+                    value_ptr.* = try parser.tokenizeNumber(&buf);
                     break :else_prong;
                 }
 
                 if (try parser.match('+')) {
-                    value_ptr.* = try parser.tokenizeNumber(.positive);
+                    var buf = std.ArrayList(u8).init(sfa);
+                    defer buf.deinit();
+                    try buf.append('+');
+
+                    value_ptr.* = try parser.tokenizeNumber(&buf);
                     break :else_prong;
                 }
 
@@ -551,10 +563,8 @@ fn Parser(comptime Reader: type) type {
             try out.appendSlice(utf8_buf[0..utf8_len]);
         }
 
-        const Sign = enum { positive, negative };
-
-        fn tokenizeNumber(parser: *ParserImpl, sign: Sign) !common.Value {
-            const base: i64 = base: {
+        fn tokenizeNumber(parser: *ParserImpl, buf: *std.ArrayList(u8)) !common.Value {
+            const radix: u8 = base: {
                 const base_zero = (try parser.readByte()) orelse return error.unexpected_eof;
                 if (base_zero == '0') {
                     const maybe_base_char = try parser.readByte();
@@ -572,6 +582,53 @@ fn Parser(comptime Reader: type) type {
                 break :base 10;
             };
 
+            try parser.tokenizeInteger(buf, radix);
+            if (radix != 10) {
+                const integer = std.fmt.parseInt(i64, buf.items, radix) catch |e| switch (e) {
+                    error.InvalidCharacter => unreachable,
+                    error.Overflow => return error.overflow,
+                };
+                return common.Value{ .integer = integer };
+            }
+
+            var is_float = false;
+
+            if (try parser.match('.')) {
+                is_float = true;
+
+                try buf.append('.');
+                try parser.tokenizeInteger(buf, 10);
+            }
+
+            if ((try parser.match('e')) or (try parser.match('E'))) {
+                is_float = true;
+
+                try buf.append('e');
+
+                if (try parser.match('+')) {
+                    try buf.append('+');
+                } else if (try parser.match('-')) {
+                    try buf.append('-');
+                }
+
+                try parser.tokenizeInteger(buf, 10);
+            }
+
+            if (is_float) {
+                const float = std.fmt.parseFloat(f64, buf.items) catch |e| switch (e) {
+                    error.InvalidCharacter => unreachable,
+                };
+                return common.Value{ .float = float };
+            } else {
+                const integer = std.fmt.parseInt(i64, buf.items, radix) catch |e| switch (e) {
+                    error.InvalidCharacter => unreachable,
+                    error.Overflow => return error.overflow,
+                };
+                return common.Value{ .integer = integer };
+            }
+        }
+
+        fn tokenizeInteger(parser: *ParserImpl, buf: *std.ArrayList(u8), base: i64) !void {
             const valid_fn = &switch (base) {
                 16 => isHexDigit,
                 10 => std.ascii.isDigit,
@@ -580,39 +637,17 @@ fn Parser(comptime Reader: type) type {
                 else => unreachable,
             };
 
-            const value_fn = &switch (base) {
-                16 => hexValue,
-                10, 8, 2 => digitValue,
-                else => unreachable,
-            };
-
-            var number_buf = std.ArrayList(u8).init(parser.allocator);
-            defer number_buf.deinit();
-
             var c = (try parser.readByte()) orelse return error.unexpected_eof;
             std.debug.assert(valid_fn(c));
             while (true) {
                 if (valid_fn(c)) {
-                    try number_buf.append(c);
+                    try buf.append(c);
                 } else if (c != '_') {
                     try parser.stream.putBackByte(c);
                     break;
                 }
                 c = (try parser.readByte()) orelse break;
             }
-
-            var scale: i64 = std.math.pow(i64, base, @intCast(i64, number_buf.items.len));
-            var number: i64 = 0;
-            for (number_buf.items) |n| {
-                scale = @divExact(scale, base);
-                number += value_fn(n) * scale;
-            }
-
-            if (sign == .negative) {
-                number = -number;
-            }
-
-            return common.Value{ .integer = number };
         }
 
         fn skipComment(parser: *ParserImpl) !void {

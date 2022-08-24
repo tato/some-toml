@@ -288,21 +288,25 @@ test "integers 3" {
 }
 
 test "floats 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 1.toml"));
     var doc = try toml.decode(std.testing.allocator, stream.reader());
     defer doc.deinit();
 
-    try std.testing.expectEquals(1, 0);
+    try std.testing.expectEqual(@as(f64, 1.0), doc.get("flt1").?.float);
+    try std.testing.expectEqual(@as(f64, 3.1415), doc.get("flt2").?.float);
+    try std.testing.expectEqual(@as(f64, -0.01), doc.get("flt3").?.float);
+    try std.testing.expectEqual(@as(f64, 5e22), doc.get("flt4").?.float);
+    try std.testing.expectEqual(@as(f64, 1e06), doc.get("flt5").?.float);
+    try std.testing.expectEqual(@as(f64, -2e-2), doc.get("flt6").?.float);
+    try std.testing.expectEqual(@as(f64, 6.626e-34), doc.get("flt7").?.float);
 }
 
 test "floats 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 2.toml"));
     var doc = try toml.decode(std.testing.allocator, stream.reader());
     defer doc.deinit();
 
-    try std.testing.expectEquals(1, 0);
+    try std.testing.expectEqual(@as(f64, 224_617.445_991_228), doc.get("flt8").?.float);
 }
 
 test "floats 3" {
@@ -311,7 +315,12 @@ test "floats 3" {
     var doc = try toml.decode(std.testing.allocator, stream.reader());
     defer doc.deinit();
 
-    try std.testing.expectEquals(1, 0);
+    try std.testing.expectEqual(std.math.inf_f64, doc.get("sf1").?.float);
+    try std.testing.expectEqual(std.math.inf_f64, doc.get("sf2").?.float);
+    try std.testing.expectEqual(-std.math.inf_f64, doc.get("sf3").?.float);
+    try std.testing.expect(std.math.isNan(doc.get("sf4").?.float));
+    try std.testing.expect(std.math.isNan(doc.get("sf5").?.float));
+    try std.testing.expect(std.math.isNan(doc.get("sf6").?.float));
 }
 
 test "floats invalid 1" {
@@ -421,15 +430,14 @@ test "arrays 1" {
     try std.testing.expectEqualSlices(u8, "are the same", strings[2].string);
     try std.testing.expectEqualSlices(u8, "type", strings[3].string);
 
-    // TODO numbers
-    // const numbers = doc.get("numbers").?.array.items;
-    // try std.testing.expectEqual(@as(usize, 6), numbers.len);
-    // try std.testing.expectEqual(@as(f64, 0.1), numbers[0].float);
-    // try std.testing.expectEqual(@as(f64, 0.2), numbers[1].float);
-    // try std.testing.expectEqual(@as(f64, 0.5), numbers[2].float);
-    // try std.testing.expectEqual(@as(i64, 1), numbers[3].integer);
-    // try std.testing.expectEqual(@as(i64, 2), numbers[4].integer);
-    // try std.testing.expectEqual(@as(i64, 5), numbers[5].integer);
+    const numbers = doc.get("numbers").?.array.items;
+    try std.testing.expectEqual(@as(usize, 6), numbers.len);
+    try std.testing.expectEqual(@as(f64, 0.1), numbers[0].float);
+    try std.testing.expectEqual(@as(f64, 0.2), numbers[1].float);
+    try std.testing.expectEqual(@as(f64, 0.5), numbers[2].float);
+    try std.testing.expectEqual(@as(i64, 1), numbers[3].integer);
+    try std.testing.expectEqual(@as(i64, 2), numbers[4].integer);
+    try std.testing.expectEqual(@as(i64, 5), numbers[5].integer);
 
     const contributors = doc.get("contributors").?.array.items;
     try std.testing.expectEqual(@as(usize, 2), contributors.len);
