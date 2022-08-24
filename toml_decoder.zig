@@ -410,6 +410,10 @@ fn Parser(comptime Reader: type) type {
                     value_ptr.* = .{ .boolean = true };
                 } else if (std.mem.eql(u8, "false", string.items)) {
                     value_ptr.* = .{ .boolean = false };
+                } else if (std.mem.eql(u8, "inf", string.items)) {
+                    value_ptr.* = .{ .float = std.math.inf_f64 };
+                } else if (std.mem.eql(u8, "nan", string.items)) {
+                    value_ptr.* = .{ .float = std.math.nan_f64 };
                 } else {
                     return error.unexpected_bare_key;
                 }
@@ -564,6 +568,23 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn tokenizeNumber(parser: *ParserImpl, buf: *std.ArrayList(u8)) !common.Value {
+            if (try parser.match('i')) {
+                try parser.consume('n', "Unexpected char 'i'.", error.unexpected_character);
+                try parser.consume('f', "Unexpected char 'f'.", error.unexpected_character);
+
+                const val = if (buf.items.len >= 1 and buf.items[0] == '-')
+                    -std.math.inf_f64
+                else
+                    std.math.inf_f64;
+                return .{ .float = val };
+            }
+
+            if (try parser.match('n')) {
+                try parser.consume('a', "Unexpected char 'n'.", error.unexpected_character);
+                try parser.consume('n', "Unexpected char 'n'.", error.unexpected_character);
+                return .{ .float = std.math.nan_f64 };
+            }
+
             const radix: u8 = base: {
                 const base_zero = (try parser.readByte()) orelse return error.unexpected_eof;
                 if (base_zero == '0') {

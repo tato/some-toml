@@ -310,7 +310,6 @@ test "floats 2" {
 }
 
 test "floats 3" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 3.toml"));
     var doc = try toml.parse(std.testing.allocator, stream.reader());
     defer doc.deinit();
