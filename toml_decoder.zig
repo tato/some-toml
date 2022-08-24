@@ -1,7 +1,7 @@
 const std = @import("std");
 const common = @import("toml_common.zig");
 
-pub fn decode(allocator: std.mem.Allocator, reader: anytype) DecodeError!common.Toml {
+pub fn parse(allocator: std.mem.Allocator, reader: anytype) DecodeError!common.Toml {
     var parser = try Parser(@TypeOf(reader)).init(allocator, reader);
     defer parser.deinit();
 
