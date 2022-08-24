@@ -633,3 +633,47 @@ test "array of tables 1" {
     try std.testing.expectEqual(@as(i64, 284758393), products[2].table.get("sku").?.integer);
     try std.testing.expectEqualSlices(u8, "gray", products[2].table.get("color").?.string);
 }
+
+test "array of tables 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 2.toml"));
+
+    var doc = try toml.decode(std.testing.allocator, stream.reader());
+    defer doc.deinit();
+
+    const fruits = doc.get("fruits").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), fruits.len);
+    try std.testing.expectEqualSlices(u8, "apple", fruits[0].table.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "red", fruits[0].table.get("physical").?.table.get("color").?.string);
+    try std.testing.expectEqualSlices(u8, "round", fruits[0].table.get("physical").?.table.get("shape").?.string);
+    const apple_varieties = fruits[0].table.get("varieties").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), apple_varieties.len);
+    try std.testing.expectEqualSlices(u8, "red delicious", apple_varieties[0].table.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "granny smith", apple_varieties[1].table.get("name").?.string);
+
+    try std.testing.expectEqualSlices(u8, "banana", fruits[1].table.get("name").?.string);
+    const banana_varieties = fruits[1].table.get("varieties").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), banana_varieties.len);
+    try std.testing.expectEqualSlices(u8, "plantain", banana_varieties[0].table.get("name").?.string);
+}
+
+test "array of tables 3" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
+    const err = try toml.decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
+
+test "array of tables 4" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
+    const err = try toml.decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
+
+test "array of tables 5" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
+    const err = try toml.decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
