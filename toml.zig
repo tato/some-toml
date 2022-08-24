@@ -599,3 +599,22 @@ test "inline tables 3" {
     const err = try toml.decode(std.testing.allocator, stream.reader());
     try std.testing.expectError(error.duplicate_key, err);
 }
+
+test "inline tables 4" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 4.toml"));
+
+    var doc = try toml.decode(std.testing.allocator, stream.reader());
+    defer doc.deinit();
+
+    const points = doc.get("points").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), points.len);
+    try std.testing.expectEqual(@as(i64, 1), points[0].table.get("x").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), points[0].table.get("y").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), points[0].table.get("z").?.integer);
+    try std.testing.expectEqual(@as(i64, 7), points[1].table.get("x").?.integer);
+    try std.testing.expectEqual(@as(i64, 8), points[1].table.get("y").?.integer);
+    try std.testing.expectEqual(@as(i64, 9), points[1].table.get("z").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), points[2].table.get("x").?.integer);
+    try std.testing.expectEqual(@as(i64, 4), points[2].table.get("y").?.integer);
+    try std.testing.expectEqual(@as(i64, 8), points[2].table.get("z").?.integer);
+}
