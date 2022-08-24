@@ -422,15 +422,22 @@ test "arrays 1" {
     try std.testing.expectEqualSlices(u8, "type", strings[3].string);
 
     // TODO numbers
+    // const numbers = doc.get("numbers").?.array.items;
+    // try std.testing.expectEqual(@as(usize, 6), numbers.len);
+    // try std.testing.expectEqual(@as(f64, 0.1), numbers[0].float);
+    // try std.testing.expectEqual(@as(f64, 0.2), numbers[1].float);
+    // try std.testing.expectEqual(@as(f64, 0.5), numbers[2].float);
+    // try std.testing.expectEqual(@as(i64, 1), numbers[3].integer);
+    // try std.testing.expectEqual(@as(i64, 2), numbers[4].integer);
+    // try std.testing.expectEqual(@as(i64, 5), numbers[5].integer);
 
-    // TODO contributors
-    // const contributors = doc.get("contributors").?.array.items;
-    // try std.testing.expectEqual(@as(usize, 2), contributors.len);
-    // try std.testing.expectEqualSlices(u8, "Foo Bar <foo@example.com>", contributors[0].string);
-    // const contributors_more = contributors[1].table;
-    // try std.testing.expectEqualSlices(u8, "Baz Qux", contributors_more.get("name").?.string);
-    // try std.testing.expectEqualSlices(u8, "bazqux@example.com", contributors_more.get("email").?.string);
-    // try std.testing.expectEqualSlices(u8, "https://example.com/bazqux", contributors_more.get("url").?.string);
+    const contributors = doc.get("contributors").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), contributors.len);
+    try std.testing.expectEqualSlices(u8, "Foo Bar <foo@example.com>", contributors[0].string);
+    const contributors_more = contributors[1].table;
+    try std.testing.expectEqualSlices(u8, "Baz Qux", contributors_more.get("name").?.string);
+    try std.testing.expectEqualSlices(u8, "bazqux@example.com", contributors_more.get("email").?.string);
+    try std.testing.expectEqualSlices(u8, "https://example.com/bazqux", contributors_more.get("url").?.string);
 }
 
 test "arrays 2" {
@@ -564,4 +571,31 @@ test "tables 11" {
     try std.testing.expectEqualSlices(u8, "red", doc.get("fruit").?.table.get("apple").?.table.get("color").?.string);
     try std.testing.expectEqual(true, doc.get("fruit").?.table.get("apple").?.table.get("taste").?.table.get("sweet").?.boolean);
     try std.testing.expectEqual(true, doc.get("fruit").?.table.get("apple").?.table.get("texture").?.table.get("smooth").?.boolean);
+}
+
+test "inline tables 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 1.toml"));
+
+    var doc = try toml.decode(std.testing.allocator, stream.reader());
+    defer doc.deinit();
+
+    try std.testing.expectEqualSlices(u8, "Tom", doc.get("name").?.table.get("first").?.string);
+    try std.testing.expectEqualSlices(u8, "Preston-Werner", doc.get("name").?.table.get("last").?.string);
+    try std.testing.expectEqual(@as(i64, 1), doc.get("point").?.table.get("x").?.integer);
+    try std.testing.expectEqual(@as(i64, 2), doc.get("point").?.table.get("y").?.integer);
+    try std.testing.expectEqualSlices(u8, "pug", doc.get("animal").?.table.get("type").?.table.get("name").?.string);
+}
+
+test "inline tables 2" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 2.toml"));
+    const err = try toml.decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
+}
+
+test "inline tables 3" {
+    if (true) return error.SkipZigTest;
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 3.toml"));
+    const err = try toml.decode(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.duplicate_key, err);
 }
