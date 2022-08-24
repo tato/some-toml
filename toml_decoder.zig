@@ -37,15 +37,19 @@ fn Parser(comptime Reader: type) type {
         const ParserImpl = @This();
         const Stream = std.io.PeekStream(.{ .Static = 2 }, Reader);
         const stack_fallback_size = 1 << 10;
-        const StackFallback = std.heap.StackFallbackAllocator(stack_fallback_size);
 
         allocator: std.mem.Allocator,
-        stack_fallback: StackFallback,
+        stack_fallback: std.heap.StackFallbackAllocator(stack_fallback_size),
 
         stream: Stream,
 
         output: common.Toml,
         current_table: *common.Value.Table,
+
+        defined: std.StringHashMapUnmanaged(ContainerKind) = .{},
+        defined_parent_key: std.ArrayListUnmanaged(u8) = .{},
+        const defined_key_separator = std.ascii.control_code.BEL;
+        const ContainerKind = enum { table, array_of_tables, value };
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
             return ParserImpl{
@@ -58,6 +62,12 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn deinit(parser: *ParserImpl) void {
+            var ki = parser.defined.keyIterator();
+            while (ki.next()) |key| parser.allocator.free(key.*);
+            parser.defined.deinit(parser.allocator);
+
+            parser.defined_parent_key.deinit(parser.allocator);
+
             parser.* = undefined;
         }
 
@@ -75,6 +85,9 @@ fn Parser(comptime Reader: type) type {
 
                         try parser.skipWhitespace();
 
+                        // parser.defined_parent_key.items.len = 0; // TODO
+                        parser.defined_parent_key.clearAndFree(parser.allocator);
+
                         var current_table = &parser.output.root;
 
                         while (true) {
@@ -82,32 +95,40 @@ fn Parser(comptime Reader: type) type {
                             defer out.deinit();
 
                             try parser.parseKeySegment(&out);
+                            try parser.defined_parent_key.appendSlice(parser.allocator, out.items);
+                            try parser.defined_parent_key.append(parser.allocator, defined_key_separator);
+
                             try parser.skipWhitespace();
                             const has_more_segments = try parser.match('.');
                             if (has_more_segments) try parser.skipWhitespace();
 
                             const gop = try current_table.getOrPut(parser.output.allocator, out.items);
+                            const defined = parser.defined.get(parser.defined_parent_key.items);
                             if (has_more_segments) {
-                                if (!gop.found_existing) {
+                                if (defined) |kind| switch (kind) {
+                                    .table => current_table = &gop.value_ptr.*.table,
+                                    else => return error.duplicate_key,
+                                } else {
+                                    try parser.defined.put(parser.allocator, try parser.allocator.dupe(u8, parser.defined_parent_key.items), .table);
+
                                     gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
                                     gop.value_ptr.* = .{ .table = .{} };
                                     current_table = &gop.value_ptr.*.table;
-                                } else if (gop.value_ptr.* == .table) {
-                                    current_table = &gop.value_ptr.*.table;
-                                } else {
-                                    return error.duplicate_key;
                                 }
                             } else {
-                                if (!gop.found_existing) {
+                                if (defined) |kind| switch (kind) {
+                                    .array_of_tables => {
+                                        try gop.value_ptr.array.append(parser.output.allocator, .{ .table = .{} });
+                                        current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                                    },
+                                    else => return error.duplicate_key,
+                                } else {
+                                    try parser.defined.put(parser.allocator, try parser.allocator.dupe(u8, parser.defined_parent_key.items), .array_of_tables);
+
                                     gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
                                     gop.value_ptr.* = .{ .array = .{} };
                                     try gop.value_ptr.array.append(parser.output.allocator, .{ .table = .{} });
                                     current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
-                                } else if (gop.value_ptr.* == .array) {
-                                    try gop.value_ptr.array.append(parser.output.allocator, .{ .table = .{} });
-                                    current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
-                                } else {
-                                    return error.duplicate_key;
                                 }
                                 break;
                             }
@@ -127,6 +148,9 @@ fn Parser(comptime Reader: type) type {
 
                         try parser.skipWhitespace();
 
+                        // parser.defined_parent_key.items.len = 0; // TODO
+                        parser.defined_parent_key.clearAndFree(parser.allocator);
+
                         var current_table = &parser.output.root;
 
                         while (true) {
@@ -134,19 +158,23 @@ fn Parser(comptime Reader: type) type {
                             defer out.deinit();
 
                             try parser.parseKeySegment(&out);
+                            try parser.defined_parent_key.appendSlice(parser.allocator, out.items);
+                            try parser.defined_parent_key.append(parser.allocator, defined_key_separator);
+
                             try parser.skipWhitespace();
                             const has_more_segments = try parser.match('.');
                             if (has_more_segments) try parser.skipWhitespace();
 
                             const gop = try current_table.getOrPut(parser.output.allocator, out.items);
-                            if (!gop.found_existing) {
+                            if (parser.defined.get(parser.defined_parent_key.items)) |kind| switch (kind) {
+                                .table => current_table = &gop.value_ptr.table,
+                                else => return error.duplicate_key,
+                            } else {
+                                try parser.defined.put(parser.allocator, try parser.allocator.dupe(u8, parser.defined_parent_key.items), .table);
+
                                 gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
                                 gop.value_ptr.* = .{ .table = .{} };
                                 current_table = &gop.value_ptr.*.table;
-                            } else if (gop.value_ptr.* == .table) {
-                                current_table = &gop.value_ptr.*.table;
-                            } else {
-                                return error.duplicate_key;
                             }
 
                             if (!has_more_segments) break;
@@ -257,6 +285,14 @@ fn Parser(comptime Reader: type) type {
         fn matchKeyValuePair(parser: *ParserImpl) !void {
             if (try parser.isAtEof()) return;
 
+            const parent_key_len = parser.defined_parent_key.items.len;
+            std.debug.print("PARENT KEY BEFORE: [{s}]\n", .{parser.defined_parent_key.items});
+            // defer parser.defined_parent_key.items.len = parent_key_len; // TODO
+            defer {
+                std.debug.print("PARENT KEY AFTER: [{s}]\nDESIRED LEN [{d}]\n", .{ parser.defined_parent_key.items, parent_key_len });
+                while (parser.defined_parent_key.items.len > parent_key_len) _ = parser.defined_parent_key.pop();
+            }
+
             var current_table = parser.current_table;
 
             const value_ptr: *common.Value = while (true) {
@@ -264,23 +300,33 @@ fn Parser(comptime Reader: type) type {
                 defer out.deinit();
 
                 try parser.parseKeySegment(&out);
+                try parser.defined_parent_key.appendSlice(parser.allocator, out.items);
+                try parser.defined_parent_key.append(parser.allocator, defined_key_separator);
+
                 try parser.skipWhitespace();
                 const has_more_segments = try parser.match('.');
                 if (has_more_segments) try parser.skipWhitespace();
 
                 const gop = try current_table.getOrPut(parser.output.allocator, out.items);
-                if (!gop.found_existing) {
-                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
-                    if (has_more_segments) {
+                const defined = parser.defined.get(parser.defined_parent_key.items);
+                if (has_more_segments) {
+                    if (defined) |kind| switch (kind) {
+                        .table => current_table = &gop.value_ptr.*.table,
+                        else => return error.duplicate_key,
+                    } else {
+                        try parser.defined.put(parser.allocator, try parser.allocator.dupe(u8, parser.defined_parent_key.items), .table);
+
+                        gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
                         gop.value_ptr.* = .{ .table = .{} };
                         current_table = &gop.value_ptr.*.table;
+                    }
+                } else {
+                    if (defined != null) {
+                        return error.duplicate_key;
                     } else {
+                        gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
                         break gop.value_ptr;
                     }
-                } else if (has_more_segments and gop.value_ptr.* == .table) {
-                    current_table = &gop.value_ptr.*.table;
-                } else {
-                    return error.duplicate_key;
                 }
             } else unreachable;
 
@@ -288,6 +334,7 @@ fn Parser(comptime Reader: type) type {
             try parser.skipWhitespace();
 
             try parser.parseValue(value_ptr);
+            try parser.defined.put(parser.allocator, try parser.allocator.dupe(u8, parser.defined_parent_key.items), .value);
 
             try parser.skipWhitespace();
         }

@@ -618,6 +618,8 @@ test "inline tables 4" {
     var doc = try toml.parse(std.testing.allocator, stream.reader());
     defer doc.deinit();
 
+    std.debug.print("\nFRONTIER:\n{}\n", .{doc});
+
     const points = doc.get("points").?.array.items;
     try std.testing.expectEqual(@as(usize, 3), points.len);
     try std.testing.expectEqual(@as(i64, 1), points[0].table.get("x").?.integer);
