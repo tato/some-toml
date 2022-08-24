@@ -618,3 +618,18 @@ test "inline tables 4" {
     try std.testing.expectEqual(@as(i64, 4), points[2].table.get("y").?.integer);
     try std.testing.expectEqual(@as(i64, 8), points[2].table.get("z").?.integer);
 }
+
+test "array of tables 1" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 1.toml"));
+
+    var doc = try toml.decode(std.testing.allocator, stream.reader());
+    defer doc.deinit();
+
+    const products = doc.get("products").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), products.len);
+    try std.testing.expectEqualSlices(u8, "Hammer", products[0].table.get("name").?.string);
+    try std.testing.expectEqual(@as(i64, 738594937), products[0].table.get("sku").?.integer);
+    try std.testing.expectEqualSlices(u8, "Nail", products[2].table.get("name").?.string);
+    try std.testing.expectEqual(@as(i64, 284758393), products[2].table.get("sku").?.integer);
+    try std.testing.expectEqualSlices(u8, "gray", products[2].table.get("color").?.string);
+}

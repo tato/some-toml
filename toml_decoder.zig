@@ -69,42 +69,97 @@ fn Parser(comptime Reader: type) type {
                 if (try parser.matchNewLine()) continue;
 
                 if (try parser.match('[')) {
-                    const sfa = parser.stack_fallback.get();
+                    if (try parser.match('[')) {
+                        const sfa = parser.stack_fallback.get();
 
-                    try parser.skipWhitespace();
+                        try parser.skipWhitespace();
 
-                    var current_table = &parser.output.root;
+                        var current_table = &parser.output.root;
 
-                    while (true) {
-                        var out = std.ArrayList(u8).init(sfa);
-                        defer out.deinit();
+                        while (true) {
+                            var out = std.ArrayList(u8).init(sfa);
+                            defer out.deinit();
 
-                        try parser.parseKeySegment(&out);
-                        const has_more_segments = try parser.match('.');
-                        if (has_more_segments) try parser.skipWhitespace();
+                            try parser.parseKeySegment(&out);
+                            try parser.skipWhitespace();
+                            const has_more_segments = try parser.match('.');
+                            if (has_more_segments) try parser.skipWhitespace();
 
-                        const gop = try current_table.getOrPut(parser.output.allocator, out.items);
-                        if (!gop.found_existing) {
-                            gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
-                            gop.value_ptr.* = .{ .table = .{} };
-                            current_table = &gop.value_ptr.*.table;
-                        } else if (gop.value_ptr.* == .table) {
-                            current_table = &gop.value_ptr.*.table;
-                        } else {
-                            return error.duplicate_key;
+                            const gop = try current_table.getOrPut(parser.output.allocator, out.items);
+                            if (has_more_segments) {
+                                if (!gop.found_existing) {
+                                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
+                                    gop.value_ptr.* = .{ .table = .{} };
+                                    current_table = &gop.value_ptr.*.table;
+                                } else if (gop.value_ptr.* == .table) {
+                                    current_table = &gop.value_ptr.*.table;
+                                } else {
+                                    return error.duplicate_key;
+                                }
+                            } else {
+                                if (!gop.found_existing) {
+                                    gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
+                                    gop.value_ptr.* = .{ .array = .{} };
+                                    try gop.value_ptr.array.append(parser.output.allocator, .{ .table = .{} });
+                                    current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                                } else if (gop.value_ptr.* == .array) {
+                                    try gop.value_ptr.array.append(parser.output.allocator, .{ .table = .{} });
+                                    current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                                } else {
+                                    return error.duplicate_key;
+                                }
+                                break;
+                            }
                         }
 
-                        if (!has_more_segments) break;
+                        parser.current_table = current_table;
+
+                        try parser.skipWhitespace();
+
+                        try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
+                        try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
+
+                        try parser.skipWhitespace();
+                        try parser.consumeNewLineOrEof();
+                    } else {
+                        const sfa = parser.stack_fallback.get();
+
+                        try parser.skipWhitespace();
+
+                        var current_table = &parser.output.root;
+
+                        while (true) {
+                            var out = std.ArrayList(u8).init(sfa);
+                            defer out.deinit();
+
+                            try parser.parseKeySegment(&out);
+                            try parser.skipWhitespace();
+                            const has_more_segments = try parser.match('.');
+                            if (has_more_segments) try parser.skipWhitespace();
+
+                            const gop = try current_table.getOrPut(parser.output.allocator, out.items);
+                            if (!gop.found_existing) {
+                                gop.key_ptr.* = try parser.output.allocator.dupe(u8, out.items);
+                                gop.value_ptr.* = .{ .table = .{} };
+                                current_table = &gop.value_ptr.*.table;
+                            } else if (gop.value_ptr.* == .table) {
+                                current_table = &gop.value_ptr.*.table;
+                            } else {
+                                return error.duplicate_key;
+                            }
+
+                            if (!has_more_segments) break;
+                        }
+
+                        parser.current_table = current_table;
+
+                        try parser.skipWhitespace();
+
+                        try parser.consume(']', "Expected ']' after table key.", error.expected_right_bracket);
+
+                        try parser.skipWhitespace();
+                        try parser.consumeNewLineOrEof();
                     }
-
-                    parser.current_table = current_table;
-
-                    try parser.skipWhitespace();
-
-                    try parser.consume(']', "Expected right bracket after table key.", error.expected_right_bracket);
-
-                    try parser.skipWhitespace();
-                    try parser.consumeNewLineOrEof();
                 } else {
                     try parser.matchKeyValuePair();
                     try parser.consumeNewLineOrEof();
@@ -208,6 +263,7 @@ fn Parser(comptime Reader: type) type {
                 defer out.deinit();
 
                 try parser.parseKeySegment(&out);
+                try parser.skipWhitespace();
                 const has_more_segments = try parser.match('.');
                 if (has_more_segments) try parser.skipWhitespace();
 
@@ -245,8 +301,6 @@ fn Parser(comptime Reader: type) type {
             } else {
                 return error.expected_key;
             }
-
-            try parser.skipWhitespace();
         }
 
         fn parseValue(parser: *ParserImpl, value_ptr: *common.Value) DecodeError!void {
