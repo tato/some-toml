@@ -378,21 +378,76 @@ test "local time 1" {
 }
 
 test "arrays 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 1.toml"));
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqual(1, 0);
+    const integers = toml.get("integers").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), integers.len);
+    try std.testing.expectEqual(@as(i64, 1), integers[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), integers[1].integer);
+    try std.testing.expectEqual(@as(i64, 3), integers[2].integer);
+
+    const colors = toml.get("colors").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), colors.len);
+    try std.testing.expectEqualSlices(u8, "red", colors[0].string);
+    try std.testing.expectEqualSlices(u8, "yellow", colors[1].string);
+    try std.testing.expectEqualSlices(u8, "green", colors[2].string);
+
+    const nested_ints = toml.get("nested_arrays_of_ints").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), nested_ints.len);
+    try std.testing.expectEqual(@as(usize, 2), nested_ints[0].array.items.len);
+    try std.testing.expectEqual(@as(i64, 1), nested_ints[0].array.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), nested_ints[0].array.items[1].integer);
+    try std.testing.expectEqual(@as(usize, 3), nested_ints[1].array.items.len);
+    try std.testing.expectEqual(@as(i64, 3), nested_ints[1].array.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 4), nested_ints[1].array.items[1].integer);
+    try std.testing.expectEqual(@as(i64, 5), nested_ints[1].array.items[2].integer);
+
+    const nested_mixed = toml.get("nested_mixed_array").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), nested_mixed.len);
+    try std.testing.expectEqual(@as(usize, 2), nested_mixed[0].array.items.len);
+    try std.testing.expectEqual(@as(i64, 1), nested_mixed[0].array.items[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), nested_mixed[0].array.items[1].integer);
+    try std.testing.expectEqual(@as(usize, 3), nested_mixed[1].array.items.len);
+    try std.testing.expectEqualSlices(u8, "a", nested_mixed[1].array.items[0].string);
+    try std.testing.expectEqualSlices(u8, "b", nested_mixed[1].array.items[1].string);
+    try std.testing.expectEqualSlices(u8, "c", nested_mixed[1].array.items[2].string);
+
+    const strings = toml.get("string_array").?.array.items;
+    try std.testing.expectEqual(@as(usize, 4), strings.len);
+    try std.testing.expectEqualSlices(u8, "all", strings[0].string);
+    try std.testing.expectEqualSlices(u8, "strings", strings[1].string);
+    try std.testing.expectEqualSlices(u8, "are the same", strings[2].string);
+    try std.testing.expectEqualSlices(u8, "type", strings[3].string);
+
+    // TODO numbers
+
+    // TODO contributors
+    // const contributors = toml.get("contributors").?.array.items;
+    // try std.testing.expectEqual(@as(usize, 2), contributors.len);
+    // try std.testing.expectEqualSlices(u8, "Foo Bar <foo@example.com>", contributors[0].string);
+    // const contributors_more = contributors[1].table;
+    // try std.testing.expectEqualSlices(u8, "Baz Qux", contributors_more.get("name").?.string);
+    // try std.testing.expectEqualSlices(u8, "bazqux@example.com", contributors_more.get("email").?.string);
+    // try std.testing.expectEqualSlices(u8, "https://example.com/bazqux", contributors_more.get("url").?.string);
 }
 
 test "arrays 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 2.toml"));
     var toml = try lib.decode(std.testing.allocator, stream.reader());
     defer toml.deinit();
 
-    try std.testing.expectEqual(1, 0);
+    const integers2 = toml.get("integers2").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), integers2.len);
+    try std.testing.expectEqual(@as(i64, 1), integers2[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), integers2[1].integer);
+    try std.testing.expectEqual(@as(i64, 3), integers2[2].integer);
+
+    const integers3 = toml.get("integers3").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), integers3.len);
+    try std.testing.expectEqual(@as(i64, 1), integers3[0].integer);
+    try std.testing.expectEqual(@as(i64, 2), integers3[1].integer);
 }
 
 test "tables 1" {

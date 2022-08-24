@@ -201,12 +201,10 @@ fn Parser(comptime Reader: type) type {
         fn matchKeyValuePair(parser: *ParserImpl) !void {
             if (try parser.isAtEof()) return;
 
-            const sfa = parser.stack_fallback.get();
-
             var current_table = parser.current_table;
 
             const value_ptr: *common.Value = while (true) {
-                var out = std.ArrayList(u8).init(sfa);
+                var out = std.ArrayList(u8).init(parser.stack_fallback.get());
                 defer out.deinit();
 
                 try parser.parseKeySegment(&out);
@@ -232,50 +230,7 @@ fn Parser(comptime Reader: type) type {
             try parser.consume('=', "Expected equals after key.", error.expected_equals);
             try parser.skipWhitespace();
 
-            {
-                try parser.ensureNotEof();
-
-                if (try parser.match('"')) {
-                    var out = std.ArrayList(u8).init(sfa);
-                    defer out.deinit();
-                    try parser.tokenizeString(.basic, .allow_multi, &out);
-                    value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
-                } else if (try parser.match('\'')) {
-                    var out = std.ArrayList(u8).init(sfa);
-                    defer out.deinit();
-                    try parser.tokenizeString(.literal, .allow_multi, &out);
-                    value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
-                } else else_prong: {
-                    if (try parser.checkFn(std.ascii.isDigit)) {
-                        value_ptr.* = try parser.tokenizeNumber(.positive);
-                        break :else_prong;
-                    }
-
-                    if (try parser.match('-')) {
-                        value_ptr.* = try parser.tokenizeNumber(.negative);
-                        break :else_prong;
-                    }
-
-                    if (try parser.match('+')) {
-                        value_ptr.* = try parser.tokenizeNumber(.positive);
-                        break :else_prong;
-                    }
-
-                    var string = std.ArrayList(u8).init(sfa);
-                    parser.tokenizeBareKey(&string) catch |e| switch (e) {
-                        error.zero_length_bare_key => return error.expected_value,
-                        else => return e,
-                    };
-                    if (std.mem.eql(u8, "true", string.items)) {
-                        value_ptr.* = .{ .boolean = true };
-                    } else if (std.mem.eql(u8, "false", string.items)) {
-                        value_ptr.* = .{ .boolean = false };
-                    } else {
-                        return error.unexpected_bare_key;
-                    }
-                    string.deinit();
-                }
-            }
+            try parser.parseValue(value_ptr);
 
             try parser.skipWhitespace();
         }
@@ -292,6 +247,78 @@ fn Parser(comptime Reader: type) type {
             }
 
             try parser.skipWhitespace();
+        }
+
+        fn parseValue(parser: *ParserImpl, value_ptr: *common.Value) !void {
+            const sfa = parser.stack_fallback.get();
+            try parser.ensureNotEof();
+
+            if (try parser.match('"')) {
+                var out = std.ArrayList(u8).init(sfa);
+                defer out.deinit();
+                try parser.tokenizeString(.basic, .allow_multi, &out);
+                value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
+            } else if (try parser.match('\'')) {
+                var out = std.ArrayList(u8).init(sfa);
+                defer out.deinit();
+                try parser.tokenizeString(.literal, .allow_multi, &out);
+                value_ptr.* = .{ .string = try parser.output.allocator.dupe(u8, out.items) };
+            } else if (try parser.match('[')) {
+                value_ptr.* = .{ .array = .{} };
+                while (true) {
+                    try parser.skipWhitespace();
+                    if (try parser.matchNewLine()) continue;
+
+                    try value_ptr.array.append(parser.output.allocator, undefined);
+                    try parser.parseValue(&value_ptr.array.items[value_ptr.array.items.len - 1]);
+
+                    try parser.skipWhitespace();
+                    while (try parser.matchNewLine()) try parser.skipWhitespace();
+
+                    const match_comma = try parser.match(',');
+
+                    try parser.skipWhitespace();
+                    while (try parser.matchNewLine()) try parser.skipWhitespace();
+
+                    const match_right_bracket = try parser.match(']');
+
+                    if (match_right_bracket) {
+                        break;
+                    } else if (!match_comma) {
+                        std.debug.print("Expected right bracket after list value.\n", .{});
+                        return error.expected_right_bracket;
+                    }
+                }
+            } else else_prong: {
+                if (try parser.checkFn(std.ascii.isDigit)) {
+                    value_ptr.* = try parser.tokenizeNumber(.positive);
+                    break :else_prong;
+                }
+
+                if (try parser.match('-')) {
+                    value_ptr.* = try parser.tokenizeNumber(.negative);
+                    break :else_prong;
+                }
+
+                if (try parser.match('+')) {
+                    value_ptr.* = try parser.tokenizeNumber(.positive);
+                    break :else_prong;
+                }
+
+                var string = std.ArrayList(u8).init(sfa);
+                parser.tokenizeBareKey(&string) catch |e| switch (e) {
+                    error.zero_length_bare_key => return error.expected_value,
+                    else => return e,
+                };
+                if (std.mem.eql(u8, "true", string.items)) {
+                    value_ptr.* = .{ .boolean = true };
+                } else if (std.mem.eql(u8, "false", string.items)) {
+                    value_ptr.* = .{ .boolean = false };
+                } else {
+                    return error.unexpected_bare_key;
+                }
+                string.deinit();
+            }
         }
 
         fn tokenizeBareKey(parser: *ParserImpl, out: *std.ArrayList(u8)) !void {

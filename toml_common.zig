@@ -19,7 +19,7 @@ pub const Value = union(enum) {
     integer: i64,
     float: f64,
     boolean: bool,
-    list: []const Value,
+    array: std.ArrayListUnmanaged(Value),
     table: Table,
 
     pub const Table = std.StringHashMapUnmanaged(Value);
@@ -28,7 +28,10 @@ pub const Value = union(enum) {
         switch (value.*) {
             .boolean, .integer, .float => {},
             .string => allocator.free(value.string),
-            .list => allocator.free(value.list),
+            .array => {
+                for (value.array.items) |*item| item.deinit(allocator);
+                value.array.deinit(allocator);
+            },
             .table => deinitTable(allocator, &value.table),
         }
         value.* = undefined;
