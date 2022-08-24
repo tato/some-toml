@@ -323,12 +323,17 @@ test "floats 3" {
 }
 
 test "floats invalid 1" {
-    if (true) return error.SkipZigTest;
-    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats invalid 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var stream = std.io.fixedBufferStream("invalid_float_1 = .7");
+    var err = toml.parse(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.expected_value, err);
 
-    try std.testing.expectEquals(1, 0);
+    stream = std.io.fixedBufferStream("invalid_float_2 = 7.");
+    err = toml.parse(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.unexpected_eof, err);
+
+    stream = std.io.fixedBufferStream("invalid_float_3 = 3.e+20");
+    err = toml.parse(std.testing.allocator, stream.reader());
+    try std.testing.expectError(error.unexpected_character, err);
 }
 
 test "booleans 1" {

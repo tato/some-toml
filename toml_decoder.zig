@@ -659,7 +659,7 @@ fn Parser(comptime Reader: type) type {
             };
 
             var c = (try parser.readByte()) orelse return error.unexpected_eof;
-            std.debug.assert(valid_fn(c));
+            if (!valid_fn(c)) return error.unexpected_character;
             while (true) {
                 if (valid_fn(c)) {
                     try buf.append(c);
