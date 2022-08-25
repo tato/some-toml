@@ -491,16 +491,10 @@ test "tables 2" {
 }
 
 test "tables 3" {
-    if (true) return error.SkipZigTest; // TODO: temporarily allowing this
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 3.toml"));
     const err = toml.parse(std.testing.allocator, stream.reader());
     try std.testing.expectError(error.duplicate_key, err);
 }
-
-// TODO
-// Since tables cannot be defined more than once, redefining such tables using a [table] header is not allowed.
-// Likewise, using dotted keys to redefine tables already defined in [table] form is not allowed. The [table] form
-// can, however, be used to define sub-tables within tables defined via dotted keys.
 
 test "tables 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 4.toml"));

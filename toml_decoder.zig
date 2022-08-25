@@ -47,6 +47,10 @@ fn Parser(comptime Reader: type) type {
         output: common.Toml,
         current_table: *common.Value.Table,
 
+        defined_tables: NodeMap = .{},
+        const TreeNode = struct { map: NodeMap = .{}, defined: bool = false };
+        const NodeMap = std.StringHashMapUnmanaged(TreeNode);
+
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
             return ParserImpl{
                 .allocator = allocator,
@@ -58,7 +62,17 @@ fn Parser(comptime Reader: type) type {
         }
 
         fn deinit(parser: *ParserImpl) void {
+            deinitNodeMap(parser, &parser.defined_tables);
             parser.* = undefined;
+        }
+
+        fn deinitNodeMap(parser: *ParserImpl, map: *NodeMap) void {
+            var i = map.iterator();
+            while (i.next()) |entry| {
+                deinitNodeMap(parser, &entry.value_ptr.map);
+                parser.allocator.free(entry.key_ptr.*);
+            }
+            map.deinit(parser.allocator);
         }
 
         fn parse(parser: *ParserImpl) !common.Toml {
@@ -128,6 +142,7 @@ fn Parser(comptime Reader: type) type {
                         try parser.skipWhitespace();
 
                         var current_table = &parser.output.root;
+                        var current_tree_node = &parser.defined_tables;
 
                         while (true) {
                             var out = std.ArrayList(u8).init(sfa);
@@ -137,6 +152,26 @@ fn Parser(comptime Reader: type) type {
                             try parser.skipWhitespace();
                             const has_more_segments = try parser.match('.');
                             if (has_more_segments) try parser.skipWhitespace();
+
+                            const ctn_gop = try current_tree_node.getOrPut(parser.allocator, out.items);
+                            if (!ctn_gop.found_existing) {
+                                if (has_more_segments) {
+                                    ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                                    ctn_gop.value_ptr.* = .{};
+                                    current_tree_node = &ctn_gop.value_ptr.map;
+                                } else {
+                                    ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                                    ctn_gop.value_ptr.* = .{ .defined = true };
+                                }
+                            } else {
+                                if (has_more_segments) {
+                                    current_tree_node = &ctn_gop.value_ptr.map;
+                                } else if (ctn_gop.value_ptr.defined) {
+                                    return error.duplicate_key;
+                                } else {
+                                    ctn_gop.value_ptr.defined = true;
+                                }
+                            }
 
                             const gop = try current_table.getOrPut(parser.output.allocator, out.items);
                             if (!gop.found_existing) {
