@@ -96,116 +96,9 @@ fn Parser(comptime Reader: type) type {
 
                 if (try parser.match('[')) {
                     if (try parser.match('[')) {
-                        const sfa = parser.stack_fallback.get();
-
-                        try parser.skipWhitespace();
-
-                        var current_table = &parser.output;
-
-                        while (true) {
-                            var out = std.ArrayList(u8).init(sfa);
-                            defer out.deinit();
-
-                            try parser.parseKeySegment(&out);
-                            try parser.skipWhitespace();
-                            const has_more_segments = try parser.match('.');
-                            if (has_more_segments) try parser.skipWhitespace();
-
-                            const gop = try current_table.table.getOrPut(parser.allocator, out.items);
-                            if (has_more_segments) {
-                                if (!gop.found_existing) {
-                                    gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                                    gop.value_ptr.* = .{ .table = .{} };
-                                    current_table = &gop.value_ptr.*.table;
-                                } else if (gop.value_ptr.* == .table) {
-                                    current_table = &gop.value_ptr.*.table;
-                                } else {
-                                    return error.duplicate_key;
-                                }
-                            } else {
-                                if (!gop.found_existing) {
-                                    gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                                    gop.value_ptr.* = .{ .array = .{} };
-                                    try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
-                                    current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
-                                } else if (gop.value_ptr.* == .array) {
-                                    try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
-                                    current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
-                                } else {
-                                    return error.duplicate_key;
-                                }
-                                break;
-                            }
-                        }
-
-                        parser.current_table = current_table;
-
-                        try parser.skipWhitespace();
-
-                        try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
-                        try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
-
-                        try parser.skipWhitespace();
-                        try parser.consumeNewLineOrEof();
+                        try parser.parseArrayOfTablesDefinition();
                     } else {
-                        const sfa = parser.stack_fallback.get();
-
-                        try parser.skipWhitespace();
-
-                        var current_table = &parser.output;
-                        var current_tree_node = &parser.defined_tables;
-
-                        while (true) {
-                            var out = std.ArrayList(u8).init(sfa);
-                            defer out.deinit();
-
-                            try parser.parseKeySegment(&out);
-                            try parser.skipWhitespace();
-                            const has_more_segments = try parser.match('.');
-                            if (has_more_segments) try parser.skipWhitespace();
-
-                            const ctn_gop = try current_tree_node.getOrPut(parser.allocator, out.items);
-                            if (!ctn_gop.found_existing) {
-                                if (has_more_segments) {
-                                    ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                                    ctn_gop.value_ptr.* = .{};
-                                    current_tree_node = &ctn_gop.value_ptr.map;
-                                } else {
-                                    ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                                    ctn_gop.value_ptr.* = .{ .defined = true };
-                                }
-                            } else {
-                                if (has_more_segments) {
-                                    current_tree_node = &ctn_gop.value_ptr.map;
-                                } else if (ctn_gop.value_ptr.defined) {
-                                    return error.duplicate_key;
-                                } else {
-                                    ctn_gop.value_ptr.defined = true;
-                                }
-                            }
-
-                            const gop = try current_table.table.getOrPut(parser.allocator, out.items);
-                            if (!gop.found_existing) {
-                                gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                                gop.value_ptr.* = .{ .table = .{} };
-                                current_table = &gop.value_ptr.*.table;
-                            } else if (gop.value_ptr.* == .table) {
-                                current_table = &gop.value_ptr.*.table;
-                            } else {
-                                return error.duplicate_key;
-                            }
-
-                            if (!has_more_segments) break;
-                        }
-
-                        parser.current_table = current_table;
-
-                        try parser.skipWhitespace();
-
-                        try parser.consume(']', "Expected ']' after table key.", error.expected_right_bracket);
-
-                        try parser.skipWhitespace();
-                        try parser.consumeNewLineOrEof();
+                        try parser.parseTableDefinition();
                     }
                 } else {
                     try parser.matchKeyValuePair();
@@ -465,6 +358,121 @@ fn Parser(comptime Reader: type) type {
                 }
                 string.deinit();
             }
+        }
+
+        fn parseTableDefinition(parser: *ParserImpl) !void {
+            const sfa = parser.stack_fallback.get();
+
+            try parser.skipWhitespace();
+
+            var current_table = &parser.output;
+            var current_tree_node = &parser.defined_tables;
+
+            while (true) {
+                var out = std.ArrayList(u8).init(sfa);
+                defer out.deinit();
+
+                try parser.parseKeySegment(&out);
+                try parser.skipWhitespace();
+                const has_more_segments = try parser.match('.');
+                if (has_more_segments) try parser.skipWhitespace();
+
+                const ctn_gop = try current_tree_node.getOrPut(parser.allocator, out.items);
+                if (!ctn_gop.found_existing) {
+                    if (has_more_segments) {
+                        ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                        ctn_gop.value_ptr.* = .{};
+                        current_tree_node = &ctn_gop.value_ptr.map;
+                    } else {
+                        ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                        ctn_gop.value_ptr.* = .{ .defined = true };
+                    }
+                } else {
+                    if (has_more_segments) {
+                        current_tree_node = &ctn_gop.value_ptr.map;
+                    } else if (ctn_gop.value_ptr.defined) {
+                        return error.duplicate_key;
+                    } else {
+                        ctn_gop.value_ptr.defined = true;
+                    }
+                }
+
+                const gop = try current_table.table.getOrPut(parser.allocator, out.items);
+                if (!gop.found_existing) {
+                    gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    gop.value_ptr.* = .{ .table = .{} };
+                    current_table = &gop.value_ptr.*.table;
+                } else if (gop.value_ptr.* == .table) {
+                    current_table = &gop.value_ptr.*.table;
+                } else {
+                    return error.duplicate_key;
+                }
+
+                if (!has_more_segments) break;
+            }
+
+            parser.current_table = current_table;
+
+            try parser.skipWhitespace();
+
+            try parser.consume(']', "Expected ']' after table key.", error.expected_right_bracket);
+
+            try parser.skipWhitespace();
+            try parser.consumeNewLineOrEof();
+        }
+
+        fn parseArrayOfTablesDefinition(parser: *ParserImpl) !void {
+            const sfa = parser.stack_fallback.get();
+
+            try parser.skipWhitespace();
+
+            var current_table = &parser.output;
+
+            while (true) {
+                var out = std.ArrayList(u8).init(sfa);
+                defer out.deinit();
+
+                try parser.parseKeySegment(&out);
+                try parser.skipWhitespace();
+                const has_more_segments = try parser.match('.');
+                if (has_more_segments) try parser.skipWhitespace();
+
+                const gop = try current_table.table.getOrPut(parser.allocator, out.items);
+                if (has_more_segments) {
+                    if (!gop.found_existing) {
+                        gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                        gop.value_ptr.* = .{ .table = .{} };
+                        current_table = &gop.value_ptr.*.table;
+                    } else if (gop.value_ptr.* == .table) {
+                        current_table = &gop.value_ptr.*.table;
+                    } else {
+                        return error.duplicate_key;
+                    }
+                } else {
+                    if (!gop.found_existing) {
+                        gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                        gop.value_ptr.* = .{ .array = .{} };
+                        try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
+                        current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                    } else if (gop.value_ptr.* == .array) {
+                        try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
+                        current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                    } else {
+                        return error.duplicate_key;
+                    }
+                    break;
+                }
+            }
+
+            parser.current_table = current_table;
+
+            try parser.skipWhitespace();
+
+            try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
+            try parser.consume(']', "Expected ']]' after array of tables key.", error.expected_right_bracket);
+
+            try parser.skipWhitespace();
+            try parser.consumeNewLineOrEof();
         }
 
         fn tokenizeBareKey(parser: *ParserImpl, out: *std.ArrayList(u8)) !void {
