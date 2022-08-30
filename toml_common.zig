@@ -1,16 +1,20 @@
 const std = @import("std");
 
-pub const Toml = struct {
-    allocator: std.mem.Allocator,
-    root: Value.Table = .{},
+pub const Table = struct {
+    table: std.StringHashMapUnmanaged(Value) = .{},
 
-    pub fn deinit(toml: *Toml) void {
-        deinitTable(toml.allocator, &toml.root);
-        toml.* = undefined;
+    pub fn deinit(table: *Table, allocator: std.mem.Allocator) void {
+        var i = table.table.iterator();
+        while (i.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
+        }
+        table.table.deinit(allocator);
+        table.* = undefined;
     }
 
-    pub fn get(toml: Toml, key: []const u8) ?Value {
-        return toml.root.get(key);
+    pub fn get(table: *const Table, key: []const u8) ?Value {
+        return table.table.get(key);
     }
 };
 
@@ -22,8 +26,6 @@ pub const Value = union(enum) {
     array: std.ArrayListUnmanaged(Value),
     table: Table,
 
-    pub const Table = std.StringHashMapUnmanaged(Value);
-
     fn deinit(value: *Value, allocator: std.mem.Allocator) void {
         switch (value.*) {
             .boolean, .integer, .float => {},
@@ -32,17 +34,8 @@ pub const Value = union(enum) {
                 for (value.array.items) |*item| item.deinit(allocator);
                 value.array.deinit(allocator);
             },
-            .table => deinitTable(allocator, &value.table),
+            .table => value.table.deinit(allocator),
         }
         value.* = undefined;
     }
 };
-
-fn deinitTable(allocator: std.mem.Allocator, table: *Value.Table) void {
-    var i = table.iterator();
-    while (i.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        entry.value_ptr.deinit(allocator);
-    }
-    table.deinit(allocator);
-}

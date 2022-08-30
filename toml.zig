@@ -9,8 +9,8 @@ const std = @import("std");
 
 test "comment" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/comment.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "value", doc.get("key").?.string);
     try std.testing.expectEqualSlices(u8, "# This is not a comment", doc.get("another").?.string);
@@ -18,32 +18,32 @@ test "comment" {
 
 test "invalid 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 1.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.unexpected_eof, err);
 }
 
 test "invalid 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 2.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.expected_newline, err);
 }
 
 test "invalid 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 3.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.expected_key, err);
 }
 
 test "invalid 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/invalid 4.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.expected_value, err);
 }
 
 test "bare keys" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/bare keys.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "value", doc.get("key").?.string);
     try std.testing.expectEqualSlices(u8, "value", doc.get("bare_key").?.string);
@@ -54,8 +54,8 @@ test "bare keys" {
 test "quoted keys" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/quoted keys.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "value", doc.get("127.0.0.1").?.string);
     try std.testing.expectEqualSlices(u8, "value", doc.get("character encoding").?.string);
@@ -67,8 +67,8 @@ test "quoted keys" {
 test "empty keys 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/empty keys 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "blank", doc.get("").?.string);
 }
@@ -76,8 +76,8 @@ test "empty keys 1" {
 test "empty keys 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/empty keys 2.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "blank", doc.get("").?.string);
 }
@@ -85,8 +85,8 @@ test "empty keys 2" {
 test "dotted keys 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "Orange", doc.get("name").?.string);
     try std.testing.expectEqualSlices(u8, "orange", doc.get("physical").?.table.get("color").?.string);
@@ -97,8 +97,8 @@ test "dotted keys 1" {
 test "dotted keys 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 2.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "banana", doc.get("fruit").?.table.get("name").?.string);
     try std.testing.expectEqualSlices(u8, "yellow", doc.get("fruit").?.table.get("color").?.string);
@@ -107,21 +107,21 @@ test "dotted keys 2" {
 
 test "repeat keys 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 1.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "repeat keys 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 2.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "repeat keys 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 3.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(true, doc.get("fruit").?.table.get("apple").?.table.get("smooth").?.boolean);
     try std.testing.expectEqual(@as(i64, 2), doc.get("fruit").?.table.get("orange").?.integer);
@@ -129,15 +129,15 @@ test "repeat keys 3" {
 
 test "repeat keys 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 4.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "out of order 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "fruit", doc.get("apple").?.table.get("type").?.string);
     try std.testing.expectEqualSlices(u8, "fruit", doc.get("orange").?.table.get("type").?.string);
@@ -150,8 +150,8 @@ test "out of order 1" {
 test "out of order 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/out of order 2.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "fruit", doc.get("apple").?.table.get("type").?.string);
     try std.testing.expectEqualSlices(u8, "thin", doc.get("apple").?.table.get("skin").?.string);
@@ -164,8 +164,8 @@ test "out of order 2" {
 test "dotted keys not floats" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys not floats.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "pi", doc.get("3").?.table.get("14159").?.string);
 }
@@ -173,24 +173,24 @@ test "dotted keys not floats" {
 test "basic strings 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/basic strings 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "I'm a string. \"You can quote me\". Name\tJos\u{00E9}\nLocation\tSF.", doc.get("str").?.string);
 }
 
 test "multi-line basic strings 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "Roses are red\nViolets are blue", doc.get("str1").?.string);
 }
 
 test "multi-line basic strings 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8,
         \\Here are two quotation marks: "". Simple enough.
@@ -205,8 +205,8 @@ test "multi-line basic strings 2" {
 
 test "multi-line basic strings line ending backslash" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line basic strings line ending backslash.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const expect = "The quick brown fox jumps over the lazy dog.";
     try std.testing.expectEqualSlices(u8, expect, doc.get("str1").?.string);
@@ -216,8 +216,8 @@ test "multi-line basic strings line ending backslash" {
 
 test "literal strings 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/literal strings 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "C:\\Users\\nodejs\\templates", doc.get("winpath").?.string);
     try std.testing.expectEqualSlices(u8, "\\\\ServerX\\admin$\\system32\\", doc.get("winpath2").?.string);
@@ -227,8 +227,8 @@ test "literal strings 1" {
 
 test "multi-line literal strings 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line literal strings 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "I [dw]on't need \\d{2} apples", doc.get("regex2").?.string);
     try std.testing.expectEqualSlices(u8,
@@ -242,8 +242,8 @@ test "multi-line literal strings 1" {
 
 test "multi-line literal strings 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/multi-line literal strings 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8,
         \\Here are fifteen quotation marks: """""""""""""""
@@ -253,8 +253,8 @@ test "multi-line literal strings 2" {
 
 test "integers 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(99 == doc.get("int1").?.integer);
     try std.testing.expect(42 == doc.get("int2").?.integer);
@@ -265,8 +265,8 @@ test "integers 1" {
 
 test "integers 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(1_000 == doc.get("int5").?.integer);
     try std.testing.expect(5_349_221 == doc.get("int6").?.integer);
@@ -276,8 +276,8 @@ test "integers 2" {
 
 test "integers 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/integers 3.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(0xDEADBEEF == doc.get("hex1").?.integer);
     try std.testing.expect(0xdeadbeef == doc.get("hex2").?.integer);
@@ -289,8 +289,8 @@ test "integers 3" {
 
 test "floats 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(@as(f64, 1.0), doc.get("flt1").?.float);
     try std.testing.expectEqual(@as(f64, 3.1415), doc.get("flt2").?.float);
@@ -303,16 +303,16 @@ test "floats 1" {
 
 test "floats 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(@as(f64, 224_617.445_991_228), doc.get("flt8").?.float);
 }
 
 test "floats 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/floats 3.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(std.math.inf_f64, doc.get("sf1").?.float);
     try std.testing.expectEqual(std.math.inf_f64, doc.get("sf2").?.float);
@@ -324,22 +324,22 @@ test "floats 3" {
 
 test "floats invalid 1" {
     var stream = std.io.fixedBufferStream("invalid_float_1 = .7");
-    var err = toml.parse(std.testing.allocator, stream.reader());
+    var err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.expected_value, err);
 
     stream = std.io.fixedBufferStream("invalid_float_2 = 7.");
-    err = toml.parse(std.testing.allocator, stream.reader());
+    err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.unexpected_eof, err);
 
     stream = std.io.fixedBufferStream("invalid_float_3 = 3.e+20");
-    err = toml.parse(std.testing.allocator, stream.reader());
+    err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.unexpected_character, err);
 }
 
 test "booleans 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/booleans 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(true, doc.get("bool1").?.boolean);
     try std.testing.expectEqual(false, doc.get("bool2").?.boolean);
@@ -348,8 +348,8 @@ test "booleans 1" {
 test "offset date time 1" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/offset date time 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(1, 0);
 }
@@ -357,8 +357,8 @@ test "offset date time 1" {
 test "offset date time 2" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/offset date time 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(1, 0);
 }
@@ -366,8 +366,8 @@ test "offset date time 2" {
 test "local date time 1" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local date time 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(1, 0);
 }
@@ -375,8 +375,8 @@ test "local date time 1" {
 test "local date 1" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local date 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(1, 0);
 }
@@ -384,16 +384,16 @@ test "local date 1" {
 test "local time 1" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local time 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqual(1, 0);
 }
 
 test "arrays 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 1.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const integers = doc.get("integers").?.array.items;
     try std.testing.expectEqual(@as(usize, 3), integers.len);
@@ -454,8 +454,8 @@ test "arrays 1" {
 
 test "arrays 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 2.toml"));
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const integers2 = doc.get("integers2").?.array.items;
     try std.testing.expectEqual(@as(usize, 3), integers2.len);
@@ -472,8 +472,8 @@ test "arrays 2" {
 test "tables 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "some string", doc.get("table-1").?.table.get("key1").?.string);
     try std.testing.expectEqual(@as(i64, 123), doc.get("table-1").?.table.get("key2").?.integer);
@@ -484,29 +484,29 @@ test "tables 1" {
 test "tables 2" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 2.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "pug", doc.get("dog").?.table.get("tater.man").?.table.get("type").?.table.get("name").?.string);
 }
 
 test "tables 3" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 3.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "tables 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 4.toml"));
-    const err = toml.parse(std.testing.allocator, stream.reader());
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "tables 5" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 5.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(doc.get("a").?.table.get("b").?.table.get("c").? == .table);
     try std.testing.expect(doc.get("d").?.table.get("e").?.table.get("f").? == .table);
@@ -517,8 +517,8 @@ test "tables 5" {
 test "tables 6" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 6.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(doc.get("x").?.table.get("y").?.table.get("z").?.table.get("w").? == .table);
     try std.testing.expect(doc.get("x").? == .table);
@@ -527,8 +527,8 @@ test "tables 6" {
 test "tables 7" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 7.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(doc.get("fruit").?.table.get("apple").? == .table);
     try std.testing.expect(doc.get("animal").? == .table);
@@ -538,8 +538,8 @@ test "tables 7" {
 test "tables 8" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 8.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expect(doc.get("fruit").?.table.get("apple").? == .table);
     try std.testing.expect(doc.get("fruit").?.table.get("orange").? == .table);
@@ -549,8 +549,8 @@ test "tables 8" {
 test "tables 9" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 9.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "Fido", doc.get("name").?.string);
     try std.testing.expectEqualSlices(u8, "pug", doc.get("breed").?.string);
@@ -561,8 +561,8 @@ test "tables 9" {
 test "tables 10" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 10.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "red", doc.get("fruit").?.table.get("apple").?.table.get("color").?.string);
     try std.testing.expectEqual(true, doc.get("fruit").?.table.get("apple").?.table.get("taste").?.table.get("sweet").?.boolean);
@@ -571,8 +571,8 @@ test "tables 10" {
 test "tables 11" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 11.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "red", doc.get("fruit").?.table.get("apple").?.table.get("color").?.string);
     try std.testing.expectEqual(true, doc.get("fruit").?.table.get("apple").?.table.get("taste").?.table.get("sweet").?.boolean);
@@ -582,8 +582,8 @@ test "tables 11" {
 test "inline tables 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     try std.testing.expectEqualSlices(u8, "Tom", doc.get("name").?.table.get("first").?.string);
     try std.testing.expectEqualSlices(u8, "Preston-Werner", doc.get("name").?.table.get("last").?.string);
@@ -595,22 +595,22 @@ test "inline tables 1" {
 test "inline tables 2" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 2.toml"));
-    const err = try toml.parse(std.testing.allocator, stream.reader());
+    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "inline tables 3" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 3.toml"));
-    const err = try toml.parse(std.testing.allocator, stream.reader());
+    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "inline tables 4" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 4.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const points = doc.get("points").?.array.items;
     try std.testing.expectEqual(@as(usize, 3), points.len);
@@ -628,8 +628,8 @@ test "inline tables 4" {
 test "array of tables 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 1.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const products = doc.get("products").?.array.items;
     try std.testing.expectEqual(@as(usize, 3), products.len);
@@ -644,8 +644,8 @@ test "array of tables 2" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 2.toml"));
 
-    var doc = try toml.parse(std.testing.allocator, stream.reader());
-    defer doc.deinit();
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
     const fruits = doc.get("fruits").?.array.items;
     try std.testing.expectEqual(@as(usize, 2), fruits.len);
@@ -666,21 +666,21 @@ test "array of tables 2" {
 test "array of tables 3" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(std.testing.allocator, stream.reader());
+    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "array of tables 4" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(std.testing.allocator, stream.reader());
+    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "array of tables 5" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(std.testing.allocator, stream.reader());
+    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
