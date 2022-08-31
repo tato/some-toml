@@ -59,7 +59,11 @@ fn Parser(comptime Reader: type) type {
         current_table: *common.Table,
 
         defined_tables: NodeMap = .{},
-        const TreeNode = struct { map: NodeMap = .{}, defined: bool = false };
+        const TreeNode = struct {
+            map: NodeMap = .{},
+            defined_as: TreeNodeKind = .none,
+        };
+        const TreeNodeKind = enum { none, table, final };
         const NodeMap = std.StringHashMapUnmanaged(TreeNode);
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
@@ -204,22 +208,22 @@ fn Parser(comptime Reader: type) type {
 
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
-                const has_more_segments = try parser.match('.');
-                if (has_more_segments) try parser.skipWhitespace();
 
-                const gop = try current_table.table.getOrPut(parser.allocator, out.items);
-                if (!gop.found_existing) {
-                    gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                    if (has_more_segments) {
-                        gop.value_ptr.* = .{ .table = .{} };
-                        current_table = &gop.value_ptr.*.table;
-                    } else {
-                        break gop.value_ptr;
-                    }
-                } else if (has_more_segments and gop.value_ptr.* == .table) {
-                    current_table = &gop.value_ptr.*.table;
-                } else {
+                const entry = try current_table.table.getOrPut(parser.allocator, out.items);
+                if (entry.found_existing and entry.value_ptr.* != .table) {
                     return error.duplicate_key;
+                }
+                if (!entry.found_existing) {
+                    entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                }
+
+                if (try parser.match('.')) {
+                    try parser.skipWhitespace();
+
+                    if (!entry.found_existing) entry.value_ptr.* = .{ .table = .{} };
+                    current_table = &entry.value_ptr.*.table;
+                } else {
+                    break entry.value_ptr;
                 }
             } else unreachable;
 
@@ -374,41 +378,35 @@ fn Parser(comptime Reader: type) type {
 
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
-                const has_more_segments = try parser.match('.');
-                if (has_more_segments) try parser.skipWhitespace();
 
-                const ctn_gop = try current_tree_node.getOrPut(parser.allocator, out.items);
-                if (!ctn_gop.found_existing) {
-                    if (has_more_segments) {
-                        ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                        ctn_gop.value_ptr.* = .{};
-                        current_tree_node = &ctn_gop.value_ptr.map;
-                    } else {
-                        ctn_gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                        ctn_gop.value_ptr.* = .{ .defined = true };
-                    }
-                } else {
-                    if (has_more_segments) {
-                        current_tree_node = &ctn_gop.value_ptr.map;
-                    } else if (ctn_gop.value_ptr.defined) {
-                        return error.duplicate_key;
-                    } else {
-                        ctn_gop.value_ptr.defined = true;
-                    }
-                }
-
-                const gop = try current_table.table.getOrPut(parser.allocator, out.items);
-                if (!gop.found_existing) {
-                    gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                    gop.value_ptr.* = .{ .table = .{} };
-                    current_table = &gop.value_ptr.*.table;
-                } else if (gop.value_ptr.* == .table) {
-                    current_table = &gop.value_ptr.*.table;
+                const entry = try current_table.table.getOrPut(parser.allocator, out.items);
+                if (!entry.found_existing) {
+                    entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    entry.value_ptr.* = .{ .table = .{} };
+                    current_table = &entry.value_ptr.*.table;
+                } else if (entry.value_ptr.* == .table) {
+                    current_table = &entry.value_ptr.*.table;
                 } else {
                     return error.duplicate_key;
                 }
 
-                if (!has_more_segments) break;
+                const tree_entry = try current_tree_node.getOrPut(parser.allocator, out.items);
+                if (!tree_entry.found_existing) {
+                    tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    tree_entry.value_ptr.* = .{};
+                }
+
+                if (try parser.match('.')) {
+                    try parser.skipWhitespace();
+                    // TODO check tree_entry, return error.duplicate_key
+                    current_tree_node = &tree_entry.value_ptr.map;
+                } else {
+                    if (tree_entry.found_existing and tree_entry.value_ptr.defined_as != .none) {
+                        return error.duplicate_key;
+                    }
+                    tree_entry.value_ptr.defined_as = .table;
+                    break;
+                }
             }
 
             parser.current_table = current_table;
@@ -434,29 +432,30 @@ fn Parser(comptime Reader: type) type {
 
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
-                const has_more_segments = try parser.match('.');
-                if (has_more_segments) try parser.skipWhitespace();
 
-                const gop = try current_table.table.getOrPut(parser.allocator, out.items);
-                if (has_more_segments) {
-                    if (!gop.found_existing) {
-                        gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                        gop.value_ptr.* = .{ .table = .{} };
-                        current_table = &gop.value_ptr.*.table;
-                    } else if (gop.value_ptr.* == .table) {
-                        current_table = &gop.value_ptr.*.table;
+                const entry = try current_table.table.getOrPut(parser.allocator, out.items);
+                if (!entry.found_existing) {
+                    entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                }
+
+                if (try parser.match('.')) {
+                    try parser.skipWhitespace();
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = .{ .table = .{} };
+                        current_table = &entry.value_ptr.*.table;
+                    } else if (entry.value_ptr.* == .table) {
+                        current_table = &entry.value_ptr.*.table;
                     } else {
                         return error.duplicate_key;
                     }
                 } else {
-                    if (!gop.found_existing) {
-                        gop.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                        gop.value_ptr.* = .{ .array = .{} };
-                        try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
-                        current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
-                    } else if (gop.value_ptr.* == .array) {
-                        try gop.value_ptr.array.append(parser.allocator, .{ .table = .{} });
-                        current_table = &gop.value_ptr.array.items[gop.value_ptr.array.items.len - 1].table;
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = .{ .array = .{} };
+                        try entry.value_ptr.array.append(parser.allocator, .{ .table = .{} });
+                        current_table = &entry.value_ptr.array.items[entry.value_ptr.array.items.len - 1].table;
+                    } else if (entry.value_ptr.* == .array) {
+                        try entry.value_ptr.array.append(parser.allocator, .{ .table = .{} });
+                        current_table = &entry.value_ptr.array.items[entry.value_ptr.array.items.len - 1].table;
                     } else {
                         return error.duplicate_key;
                     }
