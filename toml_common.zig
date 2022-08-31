@@ -16,6 +16,20 @@ pub const Table = struct {
     pub fn get(table: *const Table, key: []const u8) ?Value {
         return table.table.get(key);
     }
+
+    pub fn format(value: Table, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) @TypeOf(writer).Error!void {
+        _ = fmt;
+        _ = options;
+
+        try writer.writeAll("{\n");
+
+        var i = value.table.iterator();
+        while (i.next()) |item| {
+            try writer.print("{s} = {}\n", .{ item.key_ptr.*, item.value_ptr.* });
+        }
+
+        try writer.writeAll("}\n");
+    }
 };
 
 pub const Value = union(enum) {
@@ -37,5 +51,22 @@ pub const Value = union(enum) {
             .table => value.table.deinit(allocator),
         }
         value.* = undefined;
+    }
+
+    pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (value) {
+            .boolean => try writer.print("{}", .{value.boolean}),
+            .integer => try writer.print("{d}", .{value.integer}),
+            .float => try writer.print("{d}", .{value.float}),
+            .string => try writer.print("\"{s}\"", .{value.string}),
+            .array => {
+                try writer.writeAll("[\n");
+                for (value.array.items) |item| {
+                    try item.format(fmt, options, writer);
+                }
+                try writer.writeAll("]\n");
+            },
+            .table => try value.table.format(fmt, options, writer),
+        }
     }
 };
