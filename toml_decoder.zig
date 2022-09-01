@@ -418,6 +418,14 @@ fn Parser(comptime Reader: type) type {
                     current_table = &entry.value_ptr.*.table;
                 } else if (entry.value_ptr.* == .table) {
                     current_table = &entry.value_ptr.*.table;
+                } else if (entry.value_ptr.* == .array) {
+                    const arr = entry.value_ptr.array.items;
+                    const last_val = &arr[arr.len - 1];
+                    if (last_val.* != .table) {
+                        return error.duplicate_key;
+                    } else {
+                        current_table = &last_val.table;
+                    }
                 } else {
                     return error.duplicate_key;
                 }
@@ -486,6 +494,14 @@ fn Parser(comptime Reader: type) type {
                         current_table = &entry.value_ptr.*.table;
                     } else if (entry.value_ptr.* == .table) {
                         current_table = &entry.value_ptr.*.table;
+                    } else if (entry.value_ptr.* == .array) {
+                        const arr = entry.value_ptr.array.items;
+                        const last_val = &arr[arr.len - 1];
+                        if (last_val.* != .table) {
+                            return error.duplicate_key;
+                        } else {
+                            current_table = &last_val.table;
+                        }
                     } else {
                         return error.duplicate_key;
                     }

@@ -639,7 +639,6 @@ test "array of tables 1" {
 }
 
 test "array of tables 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 2.toml"));
 
     var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
