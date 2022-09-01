@@ -662,23 +662,20 @@ test "array of tables 2" {
 }
 
 test "array of tables 3" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "array of tables 4" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "array of tables 5" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/array of tables 3.toml"));
-    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
