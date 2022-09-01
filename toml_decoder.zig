@@ -326,27 +326,30 @@ fn Parser(comptime Reader: type) type {
                 parser.current_table = &value_ptr.*.table;
                 defer parser.current_table = previous_current_table;
 
-                while (true) {
-                    try parser.skipWhitespace();
-                    if (try parser.matchNewLine()) continue;
+                try parser.skipWhitespace();
+                if (!(try parser.match('}'))) {
+                    while (true) {
+                        try parser.skipWhitespace();
+                        if (try parser.matchNewLine()) continue;
 
-                    try parser.matchKeyValuePair(parent_tree_node);
+                        try parser.matchKeyValuePair(parent_tree_node);
 
-                    try parser.skipWhitespace();
-                    while (try parser.matchNewLine()) try parser.skipWhitespace();
+                        try parser.skipWhitespace();
+                        while (try parser.matchNewLine()) try parser.skipWhitespace();
 
-                    const match_comma = try parser.match(',');
+                        const match_comma = try parser.match(',');
 
-                    try parser.skipWhitespace();
-                    while (try parser.matchNewLine()) try parser.skipWhitespace();
+                        try parser.skipWhitespace();
+                        while (try parser.matchNewLine()) try parser.skipWhitespace();
 
-                    const match_right_bracket = try parser.match('}');
+                        const match_right_bracket = try parser.match('}');
 
-                    if (match_right_bracket) {
-                        break;
-                    } else if (!match_comma) {
-                        std.debug.print("Expected '}}' after inline table value.\n", .{});
-                        return error.expected_right_bracket;
+                        if (match_right_bracket) {
+                            break;
+                        } else if (!match_comma) {
+                            std.debug.print("Expected '}}' after inline table value.\n", .{});
+                            return error.expected_right_bracket;
+                        }
                     }
                 }
             } else else_prong: {
