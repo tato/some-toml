@@ -5,7 +5,6 @@
 
 ### not yet implemented
 - date types
-- certain duplicate key validations for table and array of tables declarations
 - good error reporting
 
 ### also planned
