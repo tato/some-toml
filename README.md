@@ -1,3 +1,5 @@
+<img align=right width=200 height=200 src="https://user-images.githubusercontent.com/14120644/187828286-f3dded3a-63b9-44e7-b934-3eaf92002c4a.png">
+
 ### sometoml
 - is a toml v1.0.0 library for zig 
 - supports serialization and deserialization
