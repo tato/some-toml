@@ -56,9 +56,11 @@ fn Parser(comptime Reader: type) type {
         stream: Stream,
 
         output: common.Table,
-        current_table: *common.Table,
-
         defined_tables: NodeMap = .{},
+
+        current_table: *common.Table,
+        current_tree_node_map: *NodeMap,
+
         const TreeNode = struct {
             map: NodeMap = .{},
             defined_as: TreeNodeKind = .none,
@@ -73,6 +75,7 @@ fn Parser(comptime Reader: type) type {
                 .stream = Stream.init(reader),
                 .output = common.Table{},
                 .current_table = undefined,
+                .current_tree_node_map = undefined,
             };
         }
 
@@ -92,6 +95,7 @@ fn Parser(comptime Reader: type) type {
 
         fn parse(parser: *ParserImpl) !common.Table {
             parser.current_table = &parser.output;
+            parser.current_tree_node_map = &parser.defined_tables;
             errdefer parser.output.deinit(parser.allocator);
 
             while (!(try parser.isAtEof())) {
@@ -105,7 +109,7 @@ fn Parser(comptime Reader: type) type {
                         try parser.parseTableDefinition();
                     }
                 } else {
-                    try parser.matchKeyValuePair();
+                    try parser.matchKeyValuePair(parser.current_tree_node_map);
                     try parser.consumeNewLineOrEof();
                 }
             }
@@ -197,8 +201,10 @@ fn Parser(comptime Reader: type) type {
             }
         }
 
-        fn matchKeyValuePair(parser: *ParserImpl) !void {
+        fn matchKeyValuePair(parser: *ParserImpl, in_parent_tree_node: *NodeMap) !void {
             if (try parser.isAtEof()) return;
+
+            var parent_tree_node = in_parent_tree_node;
 
             var current_table = parser.current_table;
 
@@ -208,6 +214,13 @@ fn Parser(comptime Reader: type) type {
 
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
+
+                const tree_entry = try parent_tree_node.getOrPut(parser.allocator, out.items);
+                if (!tree_entry.found_existing) {
+                    tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    tree_entry.value_ptr.* = .{};
+                }
+                parent_tree_node = &tree_entry.value_ptr.map;
 
                 const entry = try current_table.table.getOrPut(parser.allocator, out.items);
                 if (entry.found_existing and entry.value_ptr.* != .table) {
@@ -220,9 +233,14 @@ fn Parser(comptime Reader: type) type {
                 if (try parser.match('.')) {
                     try parser.skipWhitespace();
 
+                    if (tree_entry.value_ptr.defined_as == .final) {
+                        return error.duplicate_key;
+                    }
+
                     if (!entry.found_existing) entry.value_ptr.* = .{ .table = .{} };
                     current_table = &entry.value_ptr.*.table;
                 } else {
+                    tree_entry.value_ptr.defined_as = .final;
                     break entry.value_ptr;
                 }
             } else unreachable;
@@ -230,7 +248,7 @@ fn Parser(comptime Reader: type) type {
             try parser.consume('=', "Expected equals after key.", error.expected_equals);
             try parser.skipWhitespace();
 
-            try parser.parseValue(value_ptr);
+            try parser.parseValue(value_ptr, parent_tree_node);
 
             try parser.skipWhitespace();
         }
@@ -247,7 +265,11 @@ fn Parser(comptime Reader: type) type {
             }
         }
 
-        fn parseValue(parser: *ParserImpl, value_ptr: *common.Value) DecodeError!void {
+        fn parseValue(
+            parser: *ParserImpl,
+            value_ptr: *common.Value,
+            parent_tree_node: *NodeMap,
+        ) DecodeError!void {
             const sfa = parser.stack_fallback.get();
             try parser.ensureNotEof();
 
@@ -268,7 +290,10 @@ fn Parser(comptime Reader: type) type {
                     if (try parser.matchNewLine()) continue;
 
                     try value_ptr.array.append(parser.allocator, undefined);
-                    try parser.parseValue(&value_ptr.array.items[value_ptr.array.items.len - 1]);
+                    try parser.parseValue(
+                        &value_ptr.array.items[value_ptr.array.items.len - 1],
+                        parent_tree_node,
+                    );
 
                     try parser.skipWhitespace();
                     while (try parser.matchNewLine()) try parser.skipWhitespace();
@@ -298,7 +323,7 @@ fn Parser(comptime Reader: type) type {
                     try parser.skipWhitespace();
                     if (try parser.matchNewLine()) continue;
 
-                    try parser.matchKeyValuePair();
+                    try parser.matchKeyValuePair(parent_tree_node);
 
                     try parser.skipWhitespace();
                     while (try parser.matchNewLine()) try parser.skipWhitespace();
@@ -395,11 +420,11 @@ fn Parser(comptime Reader: type) type {
                     tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
                     tree_entry.value_ptr.* = .{};
                 }
+                current_tree_node = &tree_entry.value_ptr.map;
 
                 if (try parser.match('.')) {
                     try parser.skipWhitespace();
                     // TODO check tree_entry, return error.duplicate_key
-                    current_tree_node = &tree_entry.value_ptr.map;
                 } else {
                     if (tree_entry.found_existing and tree_entry.value_ptr.defined_as != .none) {
                         return error.duplicate_key;
@@ -410,6 +435,7 @@ fn Parser(comptime Reader: type) type {
             }
 
             parser.current_table = current_table;
+            parser.current_tree_node_map = current_tree_node;
 
             try parser.skipWhitespace();
 

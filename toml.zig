@@ -593,16 +593,15 @@ test "inline tables 1" {
 }
 
 test "inline tables 2" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 2.toml"));
-    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
 test "inline tables 3" {
     if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/inline tables 3.toml"));
-    const err = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     try std.testing.expectError(error.duplicate_key, err);
 }
 
