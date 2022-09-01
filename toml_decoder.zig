@@ -65,7 +65,7 @@ fn Parser(comptime Reader: type) type {
             map: NodeMap = .{},
             defined_as: TreeNodeKind = .none,
         };
-        const TreeNodeKind = enum { none, table, final };
+        const TreeNodeKind = enum { none, table, array_of_tables, final };
         const NodeMap = std.StringHashMapUnmanaged(TreeNode);
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
@@ -220,6 +220,7 @@ fn Parser(comptime Reader: type) type {
                     tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
                     tree_entry.value_ptr.* = .{};
                 }
+
                 parent_tree_node = &tree_entry.value_ptr.map;
 
                 const entry = try current_table.table.getOrPut(parser.allocator, out.items);
@@ -240,6 +241,9 @@ fn Parser(comptime Reader: type) type {
                     if (!entry.found_existing) entry.value_ptr.* = .{ .table = .{} };
                     current_table = &entry.value_ptr.*.table;
                 } else {
+                    if (tree_entry.found_existing) {
+                        return error.duplicate_key;
+                    }
                     tree_entry.value_ptr.defined_as = .final;
                     break entry.value_ptr;
                 }
@@ -289,10 +293,13 @@ fn Parser(comptime Reader: type) type {
                     try parser.skipWhitespace();
                     if (try parser.matchNewLine()) continue;
 
+                    var dummy_parent_tree_node: NodeMap = .{};
+                    defer parser.deinitNodeMap(&dummy_parent_tree_node);
+
                     try value_ptr.array.append(parser.allocator, undefined);
                     try parser.parseValue(
                         &value_ptr.array.items[value_ptr.array.items.len - 1],
-                        parent_tree_node,
+                        &dummy_parent_tree_node,
                     );
 
                     try parser.skipWhitespace();
@@ -451,6 +458,7 @@ fn Parser(comptime Reader: type) type {
             try parser.skipWhitespace();
 
             var current_table = &parser.output;
+            var current_tree_node = &parser.defined_tables;
 
             while (true) {
                 var out = std.ArrayList(u8).init(sfa);
@@ -458,6 +466,13 @@ fn Parser(comptime Reader: type) type {
 
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
+
+                const tree_entry = try current_tree_node.getOrPut(parser.allocator, out.items);
+                if (!tree_entry.found_existing) {
+                    tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    tree_entry.value_ptr.* = .{};
+                }
+                current_tree_node = &tree_entry.value_ptr.map;
 
                 const entry = try current_table.table.getOrPut(parser.allocator, out.items);
                 if (!entry.found_existing) {
@@ -475,6 +490,15 @@ fn Parser(comptime Reader: type) type {
                         return error.duplicate_key;
                     }
                 } else {
+                    const is_none_or_aot = tree_entry.value_ptr.defined_as == .none or tree_entry.value_ptr.defined_as == .array_of_tables;
+                    if (tree_entry.found_existing and !is_none_or_aot) {
+                        return error.duplicate_key;
+                    }
+                    tree_entry.value_ptr.defined_as = .array_of_tables;
+                    parser.deinitNodeMap(&tree_entry.value_ptr.map);
+                    tree_entry.value_ptr.map = .{};
+                    current_tree_node = &tree_entry.value_ptr.map;
+
                     if (!entry.found_existing) {
                         entry.value_ptr.* = .{ .array = .{} };
                         try entry.value_ptr.array.append(parser.allocator, .{ .table = .{} });
@@ -490,6 +514,7 @@ fn Parser(comptime Reader: type) type {
             }
 
             parser.current_table = current_table;
+            parser.current_tree_node_map = current_tree_node;
 
             try parser.skipWhitespace();
 

@@ -25,7 +25,7 @@ pub const Table = struct {
 
         var i = value.table.iterator();
         while (i.next()) |item| {
-            try writer.print("{s} = {}\n", .{ item.key_ptr.*, item.value_ptr.* });
+            try writer.print("{s} = {},\n", .{ item.key_ptr.*, item.value_ptr.* });
         }
 
         try writer.writeAll("}\n");
@@ -54,6 +54,8 @@ pub const Value = union(enum) {
     }
 
     pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
         switch (value) {
             .boolean => try writer.print("{}", .{value.boolean}),
             .integer => try writer.print("{d}", .{value.integer}),
@@ -62,7 +64,7 @@ pub const Value = union(enum) {
             .array => {
                 try writer.writeAll("[\n");
                 for (value.array.items) |item| {
-                    try item.format(fmt, options, writer);
+                    try writer.print("{},", .{item});
                 }
                 try writer.writeAll("]\n");
             },
