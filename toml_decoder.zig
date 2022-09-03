@@ -445,7 +445,6 @@ fn Parser(comptime Reader: type) type {
                         return error.duplicate_key;
                     }
                     try parser.skipWhitespace();
-                    // TODO check tree_entry, return error.duplicate_key
                 } else {
                     if (tree_entry.found_existing and tree_entry.value_ptr.defined_as != .none) {
                         return error.duplicate_key;
@@ -744,6 +743,15 @@ fn Parser(comptime Reader: type) type {
 
             var is_float = false;
 
+            if (try parser.match('-')) {
+                return parser.tokenizeDate(buf);
+            }
+
+            if (try parser.match(':')) {
+                const time = try parser.tokenizeTime(buf, .skip_hour);
+                return common.Value{ .local_time = time };
+            }
+
             if (try parser.match('.')) {
                 is_float = true;
 
@@ -799,6 +807,78 @@ fn Parser(comptime Reader: type) type {
                 }
                 c = (try parser.readByte()) orelse break;
             }
+        }
+
+        fn tokenizeDate(parser: *ParserImpl, buf: *std.ArrayList(u8)) !common.Value {
+            const year = std.fmt.parseInt(u16, buf.items, 10) catch return error.unexpected_character;
+
+            buf.clearRetainingCapacity();
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const month = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
+
+            try parser.consume('-', "Expected '-' after month.", error.unexpected_character);
+
+            buf.clearRetainingCapacity();
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const day = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
+
+            const local_date = common.LocalDate{ .year = year, .month = month, .day = day };
+            buf.clearRetainingCapacity();
+
+            const time = if (try parser.match('T')) blk: {
+                break :blk try parser.tokenizeTime(buf, .parse_hour);
+            } else if (try parser.match(' ')) blk: {
+                if (try parser.checkFn(std.ascii.isDigit)) {
+                    break :blk try parser.tokenizeTime(buf, .parse_hour);
+                }
+                try parser.stream.putBackByte(' ');
+                break :blk null;
+            } else null;
+
+            if (time == null) {
+                return common.Value{ .local_date = local_date };
+            }
+
+            return common.Value{ .local_datetime = .{ .date = local_date, .time = time.? } };
+        }
+
+        const SkipHour = enum { skip_hour, parse_hour };
+
+        fn tokenizeTime(
+            parser: *ParserImpl,
+            buf: *std.ArrayList(u8),
+            skip_hour: SkipHour,
+        ) !common.LocalTime {
+            if (skip_hour != .skip_hour) {
+                try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+                try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+
+                try parser.consume(':', "Expect ':' after hour.", error.unexpected_character);
+            }
+            const h = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
+
+            buf.clearRetainingCapacity();
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const m = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
+
+            try parser.consume(':', "Expect ':' after minute.", error.unexpected_character);
+
+            buf.clearRetainingCapacity();
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const s = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
+
+            buf.clearRetainingCapacity();
+            const ms = if (try parser.match('.')) blk: {
+                try parser.tokenizeInteger(buf, 10);
+                const ms_buf = buf.items[0..@minimum(3, buf.items.len)];
+                break :blk std.fmt.parseInt(u16, ms_buf, 10) catch return error.unexpected_character;
+            } else 0;
+
+            return common.LocalTime{ .hour = h, .minute = m, .second = s, .millisecond = ms };
         }
 
         fn skipComment(parser: *ParserImpl) !void {

@@ -364,30 +364,56 @@ test "offset date time 2" {
 }
 
 test "local date time 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local date time 1.toml"));
     var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
-    try std.testing.expectEqual(1, 0);
+    const ldt1 = doc.get("ldt1").?.local_datetime;
+    try std.testing.expectEqual(@as(u64, 1979), ldt1.date.year);
+    try std.testing.expectEqual(@as(u64, 5), ldt1.date.month);
+    try std.testing.expectEqual(@as(u64, 27), ldt1.date.day);
+    try std.testing.expectEqual(@as(u64, 7), ldt1.time.hour);
+    try std.testing.expectEqual(@as(u64, 32), ldt1.time.minute);
+    try std.testing.expectEqual(@as(u64, 0), ldt1.time.second);
+    try std.testing.expectEqual(@as(u64, 0), ldt1.time.millisecond);
+
+    const ldt2 = doc.get("ldt2").?.local_datetime;
+    try std.testing.expectEqual(@as(u64, 1979), ldt2.date.year);
+    try std.testing.expectEqual(@as(u64, 5), ldt2.date.month);
+    try std.testing.expectEqual(@as(u64, 27), ldt2.date.day);
+    try std.testing.expectEqual(@as(u64, 0), ldt2.time.hour);
+    try std.testing.expectEqual(@as(u64, 32), ldt2.time.minute);
+    try std.testing.expectEqual(@as(u64, 0), ldt2.time.second);
+    try std.testing.expectEqual(@as(u64, 999), ldt2.time.millisecond);
 }
 
 test "local date 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local date 1.toml"));
     var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
-    try std.testing.expectEqual(1, 0);
+    const ld1 = doc.get("ld1").?.local_date;
+    try std.testing.expectEqual(@as(u64, 1979), ld1.year);
+    try std.testing.expectEqual(@as(u64, 5), ld1.month);
+    try std.testing.expectEqual(@as(u64, 27), ld1.day);
 }
 
 test "local time 1" {
-    if (true) return error.SkipZigTest;
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/local time 1.toml"));
     var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
     defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
 
-    try std.testing.expectEqual(1, 0);
+    const lt1 = doc.get("lt1").?.local_time;
+    try std.testing.expectEqual(@as(u64, 7), lt1.hour);
+    try std.testing.expectEqual(@as(u64, 32), lt1.minute);
+    try std.testing.expectEqual(@as(u64, 0), lt1.second);
+    try std.testing.expectEqual(@as(u64, 0), lt1.millisecond);
+
+    const lt2 = doc.get("lt2").?.local_time;
+    try std.testing.expectEqual(@as(u64, 0), lt2.hour);
+    try std.testing.expectEqual(@as(u64, 32), lt2.minute);
+    try std.testing.expectEqual(@as(u64, 0), lt2.second);
+    try std.testing.expectEqual(@as(u64, 999), lt2.millisecond);
 }
 
 test "arrays 1" {
