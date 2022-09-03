@@ -414,6 +414,13 @@ fn Parser(comptime Reader: type) type {
                 try parser.parseKeySegment(&out);
                 try parser.skipWhitespace();
 
+                const tree_entry = try current_tree_node.getOrPut(parser.allocator, out.items);
+                if (!tree_entry.found_existing) {
+                    tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
+                    tree_entry.value_ptr.* = .{};
+                }
+                current_tree_node = &tree_entry.value_ptr.map;
+
                 const entry = try current_table.table.getOrPut(parser.allocator, out.items);
                 if (!entry.found_existing) {
                     entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
@@ -433,14 +440,10 @@ fn Parser(comptime Reader: type) type {
                     return error.duplicate_key;
                 }
 
-                const tree_entry = try current_tree_node.getOrPut(parser.allocator, out.items);
-                if (!tree_entry.found_existing) {
-                    tree_entry.key_ptr.* = try parser.allocator.dupe(u8, out.items);
-                    tree_entry.value_ptr.* = .{};
-                }
-                current_tree_node = &tree_entry.value_ptr.map;
-
                 if (try parser.match('.')) {
+                    if (tree_entry.value_ptr.defined_as == .final) {
+                        return error.duplicate_key;
+                    }
                     try parser.skipWhitespace();
                     // TODO check tree_entry, return error.duplicate_key
                 } else {
@@ -491,6 +494,10 @@ fn Parser(comptime Reader: type) type {
                 }
 
                 if (try parser.match('.')) {
+                    if (tree_entry.value_ptr.defined_as == .final) {
+                        return error.duplicate_key;
+                    }
+
                     try parser.skipWhitespace();
                     if (!entry.found_existing) {
                         entry.value_ptr.* = .{ .table = .{} };
