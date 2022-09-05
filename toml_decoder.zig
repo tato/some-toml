@@ -925,8 +925,9 @@ fn Parser(comptime Reader: type) type {
                     try parser.stream.putBackByte('\n');
                     break;
                 } else {
-                    const c = try parser.readByte();
-                    if (c == null) break;
+                    if (try parser.readByte()) |c| {
+                        if (std.ascii.isCntrl(c) and c != '\t') return error.unexpected_character;
+                    } else break;
                 }
             }
         }
