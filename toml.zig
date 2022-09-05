@@ -1,9 +1,16 @@
+const common = @import("toml_common.zig");
+const decoder = @import("toml_decoder.zig");
+const encoder = @import("toml_encoder.zig");
+
 const toml = struct {
-    usingnamespace @import("toml_common.zig");
-    usingnamespace @import("toml_decoder.zig");
-    usingnamespace @import("toml_encoder.zig");
+    usingnamespace common;
+    usingnamespace decoder;
+    usingnamespace encoder;
 };
-pub usingnamespace toml;
+
+pub usingnamespace common;
+pub usingnamespace decoder;
+pub usingnamespace encoder;
 
 const std = @import("std");
 
