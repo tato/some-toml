@@ -827,7 +827,7 @@ fn Parser(comptime Reader: type) type {
             const local_date = common.LocalDate{ .year = year, .month = month, .day = day };
             buf.clearRetainingCapacity();
 
-            const time = if (try parser.match('T')) blk: {
+            const time = if ((try parser.match('T')) or (try parser.match('t'))) blk: {
                 break :blk try parser.tokenizeTime(buf, .parse_hour);
             } else if (try parser.match(' ')) blk: {
                 if (try parser.checkFn(std.ascii.isDigit)) {
@@ -842,7 +842,7 @@ fn Parser(comptime Reader: type) type {
             }
 
             buf.clearRetainingCapacity();
-            const offset: ?i32 = if (try parser.match('Z')) blk: {
+            const offset: ?i32 = if ((try parser.match('Z')) or (try parser.match('z'))) blk: {
                 break :blk 0;
             } else if (try parser.match('-')) blk: {
                 const off = try parser.tokenizeOffset(buf);
