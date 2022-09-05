@@ -208,6 +208,9 @@ test "multi-line basic strings 2" {
     try std.testing.expectEqualSlices(u8,
         \\Here are fifteen quotation marks: """"""""""""""".
     , doc.get("str6").?.string);
+    try std.testing.expectEqualSlices(u8,
+        \\"This," she said, "is just a pointless statement."
+    , doc.get("str7").?.string);
 }
 
 test "multi-line basic strings line ending backslash" {

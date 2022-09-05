@@ -574,7 +574,7 @@ fn Parser(comptime Reader: type) type {
                 .basic => '"',
                 .literal => '\'',
             };
-            const is_multi = try parser.matchMulti(delimiter);
+            const is_multi = try parser.matchMulti(delimiter, null);
 
             if (is_multi and allow_multi == .forbid_multi)
                 return error.unexpected_multi_line_string;
@@ -589,7 +589,7 @@ fn Parser(comptime Reader: type) type {
 
                 if (is_multi) {
                     if (try parser.match(delimiter)) {
-                        if (try parser.matchMulti(delimiter))
+                        if (try parser.matchMulti(delimiter, out))
                             break;
                         try out.append(delimiter);
                         continue;
@@ -655,12 +655,18 @@ fn Parser(comptime Reader: type) type {
             }
         }
 
-        fn matchMulti(parser: *ParserImpl, delimiter: u8) !bool {
+        fn matchMulti(parser: *ParserImpl, delimiter: u8, out: ?*std.ArrayList(u8)) !bool {
             if (try parser.readByte()) |c| {
                 if (c == delimiter) {
                     if (try parser.readByte()) |c2| {
-                        if (c2 == delimiter)
+                        if (c2 == delimiter) {
+                            if (out) |o| {
+                                while (try parser.match('"')) {
+                                    try o.append('"');
+                                }
+                            }
                             return true;
+                        }
 
                         try parser.stream.putBackByte(c2);
                     }

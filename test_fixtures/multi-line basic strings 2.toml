@@ -4,5 +4,4 @@ str5 = """Here are three quotation marks: ""\"."""
 str6 = """Here are fifteen quotation marks: ""\"""\"""\"""\"""\"."""
 
 # "This," she said, "is just a pointless statement."
-# str7 = """"This," she said, "is just a pointless statement.""""
-# ^ isn't this one invalid? 🤨 ^
+str7 = """"This," she said, "is just a pointless statement.""""
