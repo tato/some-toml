@@ -552,6 +552,23 @@ test "arrays 3" {
     try std.testing.expectError(error.duplicate_key, err);
 }
 
+test "arrays 4" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/arrays 4.toml"));
+    var doc = try toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    defer toml.parseFree(&doc, .{ .allocator = std.testing.allocator });
+
+    var a = doc.get("a").?.array.items;
+    try std.testing.expect(a.len == 1);
+    a = a[0].array.items;
+    try std.testing.expect(a.len == 1);
+    a = a[0].array.items;
+    try std.testing.expect(a.len == 1);
+    a = a[0].array.items;
+    try std.testing.expect(a.len == 1);
+    a = a[0].array.items;
+    try std.testing.expect(a.len == 0);
+}
+
 test "tables 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/tables 1.toml"));
 
