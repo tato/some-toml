@@ -822,7 +822,7 @@ fn Parser(comptime Reader: type) type {
             try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
             try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
             const month = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
-            if (month >= 12) return error.unexpected_character;
+            if (month == 0 or month > 12) return error.unexpected_character;
 
             try parser.consume('-', "Expected '-' after month.", error.unexpected_character);
 
@@ -830,7 +830,7 @@ fn Parser(comptime Reader: type) type {
             try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
             try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
             const day = std.fmt.parseInt(u8, buf.items, 10) catch return error.unexpected_character;
-            if (day >= 31) return error.unexpected_character;
+            if (day == 0 or day > 31) return error.unexpected_character;
 
             const local_date = common.LocalDate{ .year = year, .month = month, .day = day };
             buf.clearRetainingCapacity();
