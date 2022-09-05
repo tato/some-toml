@@ -841,7 +841,26 @@ fn Parser(comptime Reader: type) type {
                 return common.Value{ .local_date = local_date };
             }
 
-            return common.Value{ .local_datetime = .{ .date = local_date, .time = time.? } };
+            buf.clearRetainingCapacity();
+            const offset: ?i32 = if (try parser.match('Z')) blk: {
+                break :blk 0;
+            } else if (try parser.match('-')) blk: {
+                const off = try parser.tokenizeOffset(buf);
+                break :blk -off;
+            } else if (try parser.match('+')) blk: {
+                const off = try parser.tokenizeOffset(buf);
+                break :blk off;
+            } else null;
+
+            if (offset == null) {
+                return common.Value{ .local_datetime = .{ .date = local_date, .time = time.? } };
+            }
+
+            return common.Value{ .offset_datetime = .{
+                .date = local_date,
+                .time = time.?,
+                .offset = offset.?,
+            } };
         }
 
         const SkipHour = enum { skip_hour, parse_hour };
@@ -879,6 +898,21 @@ fn Parser(comptime Reader: type) type {
             } else 0;
 
             return common.LocalTime{ .hour = h, .minute = m, .second = s, .millisecond = ms };
+        }
+
+        fn tokenizeOffset(parser: *ParserImpl, buf: *std.ArrayList(u8)) !i32 {
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const h = std.fmt.parseInt(i32, buf.items, 10) catch return error.unexpected_character;
+
+            try parser.consume(':', "Expect ':' after hour.", error.unexpected_character);
+
+            buf.clearRetainingCapacity();
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            try buf.append((try parser.readByte()) orelse return error.unexpected_eof);
+            const m = std.fmt.parseInt(i32, buf.items, 10) catch return error.unexpected_character;
+
+            return h * 60 + m;
         }
 
         fn skipComment(parser: *ParserImpl) !void {

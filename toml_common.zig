@@ -99,7 +99,7 @@ pub const Value = union(enum) {
 pub const OffsetDateTime = struct {
     date: LocalDate,
     time: LocalTime,
-    tz: void,
+    offset: i32,
 };
 pub const LocalDateTime = struct {
     date: LocalDate,
