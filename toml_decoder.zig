@@ -132,6 +132,14 @@ fn Parser(comptime Reader: type) type {
             return true;
         }
 
+        fn check(parser: *ParserImpl, char: u8) !bool {
+            if (try parser.readByte()) |byte| {
+                try parser.stream.putBackByte(byte);
+                return char == byte;
+            }
+            return false;
+        }
+
         fn checkFn(parser: *ParserImpl, comptime callback: fn (u8) bool) !bool {
             if (try parser.readByte()) |byte| {
                 try parser.stream.putBackByte(byte);
@@ -289,38 +297,26 @@ fn Parser(comptime Reader: type) type {
                 value_ptr.* = .{ .string = try parser.allocator.dupe(u8, out.items) };
             } else if (try parser.match('[')) {
                 value_ptr.* = .{ .array = .{} };
-                if (!(try parser.match(']'))) {
-                    while (true) {
-                        try parser.skipWhitespace();
-                        if (try parser.matchNewLine()) continue;
+                while (true) {
+                    try parser.skipWhitespace();
+                    if (try parser.matchNewLine()) continue;
+                    if (try parser.check(']')) break;
 
-                        var dummy_parent_tree_node: NodeMap = .{};
-                        defer parser.deinitNodeMap(&dummy_parent_tree_node);
+                    var dummy_parent_tree_node: NodeMap = .{};
+                    defer parser.deinitNodeMap(&dummy_parent_tree_node);
 
-                        try value_ptr.array.append(parser.allocator, undefined);
-                        try parser.parseValue(
-                            &value_ptr.array.items[value_ptr.array.items.len - 1],
-                            &dummy_parent_tree_node,
-                        );
+                    try value_ptr.array.append(parser.allocator, undefined);
+                    try parser.parseValue(
+                        &value_ptr.array.items[value_ptr.array.items.len - 1],
+                        &dummy_parent_tree_node,
+                    );
 
-                        try parser.skipWhitespace();
-                        while (try parser.matchNewLine()) try parser.skipWhitespace();
+                    try parser.skipWhitespace();
+                    while (try parser.matchNewLine()) try parser.skipWhitespace();
 
-                        const match_comma = try parser.match(',');
-
-                        try parser.skipWhitespace();
-                        while (try parser.matchNewLine()) try parser.skipWhitespace();
-
-                        const match_right_bracket = try parser.match(']');
-
-                        if (match_right_bracket) {
-                            break;
-                        } else if (!match_comma) {
-                            std.debug.print("Expected ']' after list value.\n", .{});
-                            return error.expected_right_bracket;
-                        }
-                    }
+                    if (!(try parser.match(','))) break;
                 }
+                try parser.consume(']', "Expected ']' after list value.\n", error.expected_right_bracket);
             } else if (try parser.match('{')) {
                 value_ptr.* = .{ .table = .{} };
 
