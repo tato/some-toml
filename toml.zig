@@ -402,6 +402,16 @@ test "offset date time 2" {
     try std.testing.expectEqual(@as(u64, 0), odt4.time.second);
     try std.testing.expectEqual(@as(u64, 0), odt4.time.millisecond);
     try std.testing.expectEqual(@as(i32, 0), odt4.offset);
+
+    const odt5 = doc.get("odt5").?.offset_datetime;
+    try std.testing.expectEqual(@as(u64, 1979), odt5.date.year);
+    try std.testing.expectEqual(@as(u64, 5), odt5.date.month);
+    try std.testing.expectEqual(@as(u64, 27), odt5.date.day);
+    try std.testing.expectEqual(@as(u64, 7), odt5.time.hour);
+    try std.testing.expectEqual(@as(u64, 32), odt5.time.minute);
+    try std.testing.expectEqual(@as(u64, 0), odt5.time.second);
+    try std.testing.expectEqual(@as(u64, 0), odt5.time.millisecond);
+    try std.testing.expectEqual(@as(i32, 0), odt5.offset);
 }
 
 test "local date time 1" {
