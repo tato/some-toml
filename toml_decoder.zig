@@ -664,7 +664,10 @@ fn Parser(comptime Reader: type) type {
                     if (try parser.readByte()) |c2| {
                         if (c2 == delimiter) {
                             if (out) |o| {
-                                while (try parser.match(delimiter)) {
+                                if (try parser.match(delimiter)) {
+                                    try o.append(delimiter);
+                                }
+                                if (try parser.match(delimiter)) {
                                     try o.append(delimiter);
                                 }
                             }
