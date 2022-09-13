@@ -65,7 +65,7 @@ fn Parser(comptime Reader: type) type {
             map: NodeMap = .{},
             defined_as: TreeNodeKind = .none,
         };
-        const TreeNodeKind = enum { none, table, array_of_tables, final };
+        const TreeNodeKind = enum { none, table, dotted_table, array_of_tables, final };
         const NodeMap = std.StringHashMapUnmanaged(TreeNode);
 
         fn init(allocator: std.mem.Allocator, reader: Reader) !ParserImpl {
@@ -244,6 +244,9 @@ fn Parser(comptime Reader: type) type {
 
                     if (tree_entry.value_ptr.defined_as == .final) {
                         return error.duplicate_key;
+                    }
+                    if (!tree_entry.found_existing) {
+                        tree_entry.value_ptr.defined_as = .dotted_table;
                     }
 
                     if (!entry.found_existing) entry.value_ptr.* = .{ .table = .{} };

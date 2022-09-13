@@ -112,6 +112,12 @@ test "dotted keys 2" {
     try std.testing.expectEqualSlices(u8, "banana", doc.get("fruit").?.table.get("flavor").?.string);
 }
 
+test "tables 12" {
+    var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/dotted keys 3.toml"));
+    const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });
+    try std.testing.expectError(error.duplicate_key, err);
+}
+
 test "repeat keys 1" {
     var stream = std.io.fixedBufferStream(@embedFile("test_fixtures/repeat keys 1.toml"));
     const err = toml.parse(stream.reader(), .{ .allocator = std.testing.allocator });

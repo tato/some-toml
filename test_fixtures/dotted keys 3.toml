@@ -1,0 +1,3 @@
+[fruit]
+apple.taste.sweet = true
+[fruit.apple.taste] # INVALID

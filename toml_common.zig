@@ -21,14 +21,14 @@ pub const Table = struct {
         _ = fmt;
         _ = options;
 
-        try writer.writeAll("{\n");
+        try writer.writeAll("{ ");
 
         var i = value.table.iterator();
         while (i.next()) |item| {
-            try writer.print("{s} = {},\n", .{ item.key_ptr.*, item.value_ptr.* });
+            try writer.print("{s} = {}, ", .{ item.key_ptr.*, item.value_ptr.* });
         }
 
-        try writer.writeAll("}\n");
+        try writer.writeAll("}");
     }
 };
 
@@ -70,11 +70,11 @@ pub const Value = union(enum) {
             .local_date => try writer.print("{}", .{value.local_date}),
             .local_time => try writer.print("{}", .{value.local_time}),
             .array => {
-                try writer.writeAll("[\n");
+                try writer.writeAll("[");
                 for (value.array.items) |item| {
                     try writer.print("{},", .{item});
                 }
-                try writer.writeAll("]\n");
+                try writer.writeAll("]");
             },
             .table => try value.table.format(fmt, options, writer),
         }
