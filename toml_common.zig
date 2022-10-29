@@ -58,8 +58,6 @@ pub const Value = union(enum) {
     }
 
     pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
         switch (value) {
             .boolean => try writer.print("{}", .{value.boolean}),
             .integer => try writer.print("{d}", .{value.integer}),

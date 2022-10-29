@@ -911,7 +911,7 @@ fn Parser(comptime Reader: type) type {
             buf.clearRetainingCapacity();
             const ms = if (try parser.match('.')) blk: {
                 try parser.tokenizeInteger(buf, 10);
-                const ms_buf = buf.items[0..@minimum(3, buf.items.len)];
+                const ms_buf = buf.items[0..@min(3, buf.items.len)];
                 break :blk std.fmt.parseInt(u16, ms_buf, 10) catch return error.unexpected_character;
             } else 0;
             if (ms >= 1000) return error.unexpected_character;
